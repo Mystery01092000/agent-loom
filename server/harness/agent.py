@@ -1,0 +1,124 @@
+"""Single-agent loop: stream a turn, run tools, append, repeat. History is append-only (preserved thinking)."""
+from __future__ import annotations
+
+import uuid
+from dataclasses import dataclass, field
+from typing import Any
+
+from .events import Event, EventBus
+from .pricing import cost_usd
+from .tools import ALL_TOOLS, ToolContext, execute, schemas
+
+FALLBACK_BETA = "server-side-fallback-2026-07-01"
+
+
+@dataclass
+class AgentDef:
+    name: str
+    system: str
+    model: str = "claude-opus-5-5"
+    effort: str = "high"  # low | medium | high | xhigh | max
+    tools: list[str] = field(default_factory=lambda: list(ALL_TOOLS))
+    max_turns: int = 50
+    max_tokens: int = 64_000  # per response
+    max_tokens_total: int = 2_000_000  # in + out across the run
+    max_cost_usd: float = 10.0
+
+
+@dataclass
+class RunResult:
+    text: str
+    stop: str  # end_turn | refusal | max_turns | budget | truncated
+    messages: list[Any]
+    usage: dict[str, int]
+    cost_usd: float
+
+
+def _usage_dict(u: Any) -> dict[str, int]:
+    return {
+        k: int(getattr(u, k, 0) or 0)
+        for k in ("input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")
+    }
+
+
+def run_agent(
+    client: Any,
+    agent: AgentDef,
+    messages: list[Any],
+    ctx: ToolContext,
+    bus: EventBus,
+    *,
+    run_id: str,
+    agent_id: str | None = None,
+    parent_id: str | None = None,
+) -> RunResult:
+    agent_id = agent_id or f"{agent.name}-{uuid.uuid4().hex[:6]}"
+    total = {"input_tokens": 0, "output_tokens": 0, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}
+    cost = 0.0
+    text = ""
+    stop = "max_turns"
+
+    def emit(type_: str, turn: int | None = None, **payload: Any) -> None:
+        bus.emit(Event(type_, run_id, agent_id, payload, parent_id, turn))
+
+    emit("agent_start", name=agent.name, model=agent.model, effort=agent.effort, tools=agent.tools)
+
+    for turn in range(1, agent.max_turns + 1):
+        with client.beta.messages.stream(
+            model=agent.model,
+            max_tokens=agent.max_tokens,
+            system=[{"type": "text", "text": agent.system, "cache_control": {"type": "ephemeral"}}],
+            messages=messages,
+            tools=schemas(agent.tools),
+            thinking={"type": "adaptive", "display": "summarized"},
+            output_config={"effort": agent.effort},
+            betas=[FALLBACK_BETA],
+            fallbacks="default",
+        ) as stream:
+            for ev in stream:
+                if ev.type == "content_block_delta":
+                    if ev.delta.type == "thinking_delta" and ev.delta.thinking:
+                        emit("thinking", turn, delta=ev.delta.thinking)
+                    elif ev.delta.type == "text_delta":
+                        emit("text", turn, delta=ev.delta.text)
+            resp = stream.get_final_message()
+
+        messages.append({"role": "assistant", "content": resp.content})
+        u = _usage_dict(resp.usage)
+        c = cost_usd(resp.model, u)
+        cost += c
+        for k in total:
+            total[k] += u[k]
+        emit("usage", turn, model=resp.model, cost_usd=c, total_cost_usd=cost, **u)
+        text = "".join(b.text for b in resp.content if b.type == "text")
+
+        tool_uses = [b for b in resp.content if b.type == "tool_use"]
+        if resp.stop_reason == "refusal":
+            stop = "refusal"
+            emit("error", turn, reason="refusal", category=getattr(getattr(resp, "stop_details", None), "category", None))
+            break
+        if resp.stop_reason == "pause_turn":
+            continue
+        if resp.stop_reason == "max_tokens" and tool_uses:
+            stop = "truncated"
+            emit("error", turn, reason="tool input truncated by max_tokens")
+            break
+        if not tool_uses:
+            stop = "end_turn"
+            break
+
+        results = []
+        for tu in tool_uses:
+            emit("tool_call", turn, tool_use_id=tu.id, name=tu.name, input=tu.input)
+            out, is_err = execute(ctx, tu.name, tu.input, agent.tools)
+            emit("tool_result", turn, tool_use_id=tu.id, name=tu.name, is_error=is_err, output=out[:4000])
+            results.append({"type": "tool_result", "tool_use_id": tu.id, "content": out, "is_error": is_err})
+        messages.append({"role": "user", "content": results})
+
+        if total["input_tokens"] + total["output_tokens"] > agent.max_tokens_total or cost > agent.max_cost_usd:
+            stop = "budget"
+            emit("error", turn, reason="budget exceeded", tokens=total, cost_usd=cost)
+            break
+
+    emit("agent_end", stop=stop, cost_usd=cost, **total)
+    return RunResult(text, stop, messages, total, cost)
