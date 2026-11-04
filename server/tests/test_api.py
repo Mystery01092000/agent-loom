@@ -1,0 +1,96 @@
+import json
+import subprocess
+import time
+from pathlib import Path
+
+import pytest
+from fastapi.testclient import TestClient
+
+from harness import api
+from harness.store import Store
+from tests.fake_client import FakeClient, text, tool_use, turn
+
+INTAKE = json.dumps({"understanding": "u", "plan": ["p"], "questions": []})
+DIAG_OK = json.dumps({"complete": True, "gaps": [], "evidence": "e"})
+
+
+def _repo(tmp_path: Path) -> Path:
+    for cmd in (["git", "init", "-q", "-b", "main"], ["git", "config", "user.email", "t@t"], ["git", "config", "user.name", "t"]):
+        subprocess.run(cmd, cwd=tmp_path, check=True)
+    (tmp_path / "a.txt").write_text("a")
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "i"], cwd=tmp_path, check=True)
+    return tmp_path
+
+
+@pytest.fixture
+def client(tmp_path: Path):
+    api.app.state.store = Store(":memory:")
+    api.app.state.live = {}
+    turns = [
+        turn(text(INTAKE)),
+        turn(tool_use("spawn_worker", {"task": "t", "context": "c"})),
+        turn(tool_use("write_file", {"path": "b.txt", "content": "b"}, "tu_w")),
+        turn(text("worker done")),
+        turn(text("sup done")),
+        turn(text(DIAG_OK)),
+        turn(text("summary\nTITLE: t")),
+    ]
+    api.app.state.client_factory = lambda: FakeClient(turns)
+    with TestClient(api.app) as c:
+        yield c
+
+
+def _wait(c: TestClient, run_id: str, pred, timeout: float = 10.0):
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        r = c.get(f"/runs/{run_id}").json()
+        if pred(r):
+            return r
+        time.sleep(0.05)
+    raise AssertionError(f"timeout waiting; last={r}")
+
+
+def test_run_via_api(client: TestClient, tmp_path: Path):
+    repo = _repo(tmp_path)
+    run_id = client.post("/runs", json={"task": "add b.txt", "cwd": str(repo)}).json()["id"]
+
+    r = _wait(client, run_id, lambda r: r["pending"] and r["pending"]["kind"] == "confirm_intake")
+    assert r["state"] == "awaiting_confirmation" and r["pending"]["intake"]["understanding"] == "u"
+    assert client.post(f"/runs/{run_id}/decide", json={"approved": True}).json() == {"ok": True}
+
+    r = _wait(client, run_id, lambda r: r["pending"] and r["pending"]["kind"] == "want_pr")
+    assert "summary" in r["pending"]["summary"]
+    client.post(f"/runs/{run_id}/decide", json={"approved": False})
+
+    r = _wait(client, run_id, lambda r: r["state"] == "done")
+    assert r["branch"] == "harness/add-b-txt" and r["commit_sha"] and r["cost_usd"] > 0
+    assert (repo / "b.txt").read_text() == "b"
+
+    evs = client.get(f"/runs/{run_id}/events").json()
+    types = [e["type"] for e in evs]
+    assert types[0] == "state" and types.count("usage") == 7 and "decision_needed" in types and "tool_call" in types
+    worker = next(e for e in evs if e["type"] == "agent_start" and e["agent_id"].startswith("worker"))
+    assert worker["parent_id"].startswith("supervisor")
+
+    cost = client.get(f"/runs/{run_id}/cost").json()
+    assert cost["total"]["calls"] == 7 and abs(cost["total"]["cost_usd"] - r["cost_usd"]) < 1e-9
+    assert {a["k"].split("-")[0] for a in cost["by_agent"]} == {"intake", "supervisor", "worker1", "diagnosis", "summarizer"}
+
+    assert client.get("/runs").json()[0]["id"] == run_id
+    assert client.post(f"/runs/{run_id}/decide", json={"approved": True}).status_code == 409
+    only = client.get(f"/runs/{run_id}/events", params={"types": "state,usage"}).json()
+    assert {e["type"] for e in only} == {"state", "usage"}
+
+
+def test_stream_replays_finished_run(client: TestClient, tmp_path: Path):
+    repo = _repo(tmp_path)
+    run_id = client.post("/runs", json={"task": "x", "cwd": str(repo)}).json()["id"]
+    _wait(client, run_id, lambda r: r["pending"])
+    client.post(f"/runs/{run_id}/decide", json={"approved": True})
+    _wait(client, run_id, lambda r: r["pending"] and r["pending"]["kind"] == "want_pr")
+    client.post(f"/runs/{run_id}/decide", json={"approved": False})
+    _wait(client, run_id, lambda r: r["state"] == "done")
+    with client.stream("GET", f"/runs/{run_id}/stream") as s:
+        body = "".join(s.iter_text())
+    assert body.count("event: ") >= 10 and '"state": "done"' in body
