@@ -66,6 +66,24 @@ class StartRun(BaseModel):
     main_model: str = "claude-opus-5-5"
     worker_model: str = "claude-sonnet-5-5"
     max_cost_usd: float = 20.0
+    continue_from: str | None = None  # id of a finished run in the thread to continue
+
+
+def _thread_context(store: Store, thread_id: str) -> str:
+    """Everything the next run needs to know about the earlier runs of a thread: requests, outcomes, summaries, open gaps."""
+    parts = ["This continues earlier work in the same repository and on the same branch. History of this thread:"]
+    for i, r in enumerate(store.runs(thread_id), 1):
+        evs = store.events(r["id"], types=["state", "diagnosis"])
+        summary = next((e["payload"]["summary"] for e in reversed(evs) if e["payload"].get("summary")), "")
+        diag = next((e["payload"] for e in reversed(evs) if e["type"] == "diagnosis"), None)
+        parts.append(f"\n--- Run {i} ({r['state']}, branch {r['branch'] or 'none'}) ---\nRequest:\n{r['task']}")
+        if diag:
+            parts.append(f"Diagnosis: complete={diag.get('complete')} gaps={json.dumps(diag.get('gaps', []))}")
+        if summary:
+            parts.append(f"Summary:\n{summary}")
+        if r["state"] in ("cancelled", "failed"):
+            parts.append("This run did not finish; any partial changes may still be uncommitted in the working tree. Check `git status` and `git diff` before planning.")
+    return "\n".join(parts)
 
 
 class Decision(BaseModel):
@@ -121,13 +139,22 @@ def _serialize(ev: Event, row_id: int) -> dict[str, Any]:
 async def start_run(body: StartRun) -> dict[str, Any]:
     store: Store = app.state.store
     bus = EventBus()
-    run = Run(task=body.task, cwd=Path(body.cwd).resolve(), io=None, client=_client(), bus=bus, main_model=body.main_model, worker_model=body.worker_model, max_cost_usd=body.max_cost_usd)  # type: ignore[arg-type]
+    cwd, thread_id, branch, prior = Path(body.cwd).resolve(), "", "", ""
+    if body.continue_from:
+        prev = store.run(body.continue_from)
+        if not prev:
+            raise HTTPException(404, "run to continue not found")
+        if prev["state"] not in TERMINAL:
+            raise HTTPException(409, "that run is still active")
+        cwd, thread_id, branch = Path(prev["cwd"]), prev["thread_id"], prev["branch"] or ""
+        prior = _thread_context(store, thread_id)
+    run = Run(task=body.task, cwd=cwd, io=None, client=_client(), bus=bus, thread_id=thread_id, prior_context=prior, branch=branch, main_model=body.main_model, worker_model=body.worker_model, max_cost_usd=body.max_cost_usd)  # type: ignore[arg-type]
     io = QueueIO(bus, run.id)
     run.io = io
     live = LiveRun(run, io)
     live.loop = asyncio.get_running_loop()
     app.state.live[run.id] = live
-    store.create_run(run.id, run.task, str(run.cwd))
+    store.create_run(run.id, run.task, str(run.cwd), run.thread_id)
 
     def on_event(ev: Event) -> None:
         row_id = store.append(ev)
@@ -153,8 +180,8 @@ async def start_run(body: StartRun) -> dict[str, Any]:
 
 
 @app.get("/runs")
-def list_runs() -> list[dict[str, Any]]:
-    return app.state.store.runs()
+def list_runs(thread: str | None = None) -> list[dict[str, Any]]:
+    return app.state.store.runs(thread)
 
 
 @app.get("/runs/{run_id}")

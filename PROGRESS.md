@@ -38,3 +38,4 @@ cd server && uv run python -m harness.cli "task" --cwd <repo> # terminal flow
 - `feat: chat-style UI` — markdown replies, collapsible steps, inline decisions, cost strip; live-verified on a Go project build ($0.55, 23 calls, go build/vet/test pass)
 - `feat: liquid-glass UI` — prompt-composer component under web/src/components/ui (gsap), @/ alias, dark glass theme across sidebar/chat/cost strip; task-kind chips and model menu wired to the API
 - `feat: README, cancel, tail caching` — README with philosophy + screenshots, POST /runs/{id}/cancel + Stop button, top-level cache_control on the conversation tail; 18 tests green
+- `feat: thread continuation` — runs grouped into threads; typing under a finished/cancelled run continues on the same branch with thread history as intake context; orphan sweep on restart; 20 tests green

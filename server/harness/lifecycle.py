@@ -81,6 +81,8 @@ class Run:
     client: Any
     bus: EventBus = field(default_factory=EventBus)
     id: str = field(default_factory=lambda: uuid.uuid4().hex[:8])
+    thread_id: str = ""  # runs that continue each other share a thread; empty = own id
+    prior_context: str = ""  # what happened in the earlier run(s) of the thread, for a continuation
     worker_model: str = "claude-sonnet-5-5"
     main_model: str = "claude-opus-5-5"
     max_cost_usd: float = 20.0
@@ -96,7 +98,15 @@ class Run:
     _workers: int = 0
 
     def __post_init__(self) -> None:
+        self.thread_id = self.thread_id or self.id
         self.bus.subscribe(self._track_cost)
+
+    @property
+    def request(self) -> str:
+        """The user's message, prefixed with the thread history when this run continues an earlier one."""
+        if not self.prior_context:
+            return self.task
+        return f"{self.prior_context}\n\nThe user now says:\n{self.task}"
 
     def cancel(self) -> None:
         self.cancelled.set()
@@ -132,7 +142,7 @@ class Run:
     def run_intake(self) -> dict[str, Any]:
         self._set("intake")
         agent = self._agent("intake", INTAKE_SYS, tools=READ_ONLY, output_schema=INTAKE_SCHEMA, max_turns=15)
-        prompt = f"User request:\n{self.task}"
+        prompt = f"User request:\n{self.request}"
         for _ in range(3):
             res = self._run(agent, prompt)
             self.intake = json.loads(res.text)
@@ -140,7 +150,7 @@ class Run:
             ok, feedback = self.io.confirm_intake(self.intake)
             if ok:
                 return self.intake
-            prompt = f"User request:\n{self.task}\n\nYour previous understanding:\n{json.dumps(self.intake, indent=2)}\n\nUser feedback:\n{feedback}"
+            prompt = f"User request:\n{self.request}\n\nYour previous understanding:\n{json.dumps(self.intake, indent=2)}\n\nUser feedback:\n{feedback}"
         raise RuntimeError("intake not confirmed after 3 attempts")
 
     def _spawn_worker_tool(self) -> dict[str, Any]:
@@ -170,7 +180,7 @@ class Run:
         self._set("working")
         self._supervisor_id = f"supervisor-{uuid.uuid4().hex[:6]}"
         agent = self._agent("supervisor", SUPERVISOR_SYS, tools=READ_ONLY + ["bash", "spawn_worker"], extra_tools=self._spawn_worker_tool())
-        prompt = f"User request:\n{self.task}\n\nConfirmed understanding and plan:\n{json.dumps(self.intake, indent=2)}"
+        prompt = f"User request:\n{self.request}\n\nConfirmed understanding and plan:\n{json.dumps(self.intake, indent=2)}"
         if extra:
             prompt += f"\n\n{extra}"
         self._check_cancel()
@@ -182,7 +192,7 @@ class Run:
         self._set("diagnosing")
         agent = self._agent("diagnosis", DIAG_SYS, tools=READ_ONLY + ["bash"], output_schema=DIAG_SCHEMA, max_turns=20)
         prompt = (
-            f"User request:\n{self.task}\n\nConfirmed plan:\n{json.dumps(self.intake, indent=2)}\n\n"
+            f"User request:\n{self.request}\n\nConfirmed plan:\n{json.dumps(self.intake, indent=2)}\n\n"
             f"Diff of the work:\n```\n{git.diff(self.cwd) if git.is_repo(self.cwd) else '(not a git repo)'}\n```"
         )
         self.diagnosis = json.loads(self._run(agent, prompt).text)
@@ -193,7 +203,7 @@ class Run:
         self._set("summarizing")
         agent = self._agent("summarizer", SUMMARY_SYS, tools=[], max_turns=1)
         prompt = (
-            f"User request:\n{self.task}\n\nDiagnosis:\n{json.dumps(self.diagnosis, indent=2)}\n\n"
+            f"User request:\n{self.request}\n\nDiagnosis:\n{json.dumps(self.diagnosis, indent=2)}\n\n"
             f"Changes:\n{git.diff_stat(self.cwd) if git.is_repo(self.cwd) else '(not a git repo)'}\n\nBranch: {self.branch or '(none)'}"
         )
         self.summary = self._run(agent, prompt).text
@@ -203,7 +213,7 @@ class Run:
         try:
             self.run_intake()
             if git.is_repo(self.cwd):
-                self.branch = git.create_branch(self.cwd, git.slugify(self.task))
+                self.branch = git.checkout(self.cwd, self.branch) if self.branch else git.create_branch(self.cwd, git.slugify(self.task))
                 self.bus.emit(Event("branch", self.id, "run", {"branch": self.branch}))
             self.run_supervisor()
             for attempt in range(2):

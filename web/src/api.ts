@@ -22,6 +22,7 @@ export type RunRow = {
   commit_sha: string
   pr_url: string
   created_at: number
+  thread_id: string
   pending?: Record<string, any> | null
 }
 
@@ -40,7 +41,7 @@ const j = async <T,>(r: Promise<Response>): Promise<T> => {
 export const api = {
   runs: () => j<RunRow[]>(fetch(`${BASE}/runs`)),
   run: (id: string) => j<RunRow>(fetch(`${BASE}/runs/${id}`)),
-  start: (body: { task: string; cwd: string; main_model?: string; worker_model?: string; max_cost_usd?: number }) =>
+  start: (body: { task: string; cwd?: string; main_model?: string; worker_model?: string; max_cost_usd?: number; continue_from?: string }) =>
     j<{ id: string }>(fetch(`${BASE}/runs`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })),
   decide: (id: string, approved: boolean, feedback = '') =>
     j<{ ok: true }>(fetch(`${BASE}/runs/${id}/decide`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ approved, feedback }) })),

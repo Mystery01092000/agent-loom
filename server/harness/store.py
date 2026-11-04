@@ -30,10 +30,17 @@ class Store:
         self.lock = threading.Lock()  # ponytail: one connection + lock; move to a pool if writes contend
         with self.lock:
             self.db.executescript(SCHEMA)
+            if "thread_id" not in [r[1] for r in self.db.execute("PRAGMA table_info(runs)")]:
+                self.db.execute("ALTER TABLE runs ADD COLUMN thread_id TEXT")
+            self.db.execute("UPDATE runs SET thread_id = id WHERE thread_id IS NULL")
+            self.db.commit()
 
-    def create_run(self, run_id: str, task: str, cwd: str) -> None:
+    def create_run(self, run_id: str, task: str, cwd: str, thread_id: str | None = None) -> None:
         with self.lock:
-            self.db.execute("INSERT INTO runs (id, task, cwd, state, created_at) VALUES (?,?,?,?,?)", (run_id, task, cwd, "created", time.time()))
+            self.db.execute(
+                "INSERT INTO runs (id, task, cwd, state, created_at, thread_id) VALUES (?,?,?,?,?,?)",
+                (run_id, task, cwd, "created", time.time(), thread_id or run_id),
+            )
             self.db.commit()
 
     def update_run(self, run_id: str, **fields: Any) -> None:
@@ -51,8 +58,10 @@ class Store:
             self.db.commit()
             return int(cur.lastrowid or 0)
 
-    def runs(self) -> list[dict[str, Any]]:
+    def runs(self, thread_id: str | None = None) -> list[dict[str, Any]]:
         with self.lock:
+            if thread_id:
+                return [dict(r) for r in self.db.execute("SELECT * FROM runs WHERE thread_id = ? ORDER BY created_at", (thread_id,))]
             return [dict(r) for r in self.db.execute("SELECT * FROM runs ORDER BY created_at DESC")]
 
     def run(self, run_id: str) -> dict[str, Any] | None:

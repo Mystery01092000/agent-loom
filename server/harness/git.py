@@ -30,6 +30,15 @@ def create_branch(cwd: Path, slug: str) -> str:
     return name
 
 
+def checkout(cwd: Path, name: str) -> str:
+    """Switch to an existing branch (creating it if it vanished). Returns the branch name."""
+    if name in _git(cwd, "branch", "--list", name).split():
+        _git(cwd, "checkout", "-q", name, check=True)
+    else:
+        _git(cwd, "checkout", "-q", "-b", name, check=True)
+    return name
+
+
 def current_branch(cwd: Path) -> str:
     return _git(cwd, "branch", "--show-current")
 

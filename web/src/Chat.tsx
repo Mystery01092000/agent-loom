@@ -2,7 +2,7 @@ import DOMPurify from 'dompurify'
 import { marked } from 'marked'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import PromptComposer from '@/components/ui/prompt-composer'
-import { api } from './api'
+import { api, type RunRow } from './api'
 import { empty, k, reduce, usd, type Agent, type ToolCall, type Turn, type View } from './model'
 
 // ---------- shared bits ----------
@@ -20,33 +20,38 @@ export function Btn({ children, onClick, secondary }: { children: React.ReactNod
   )
 }
 
-// ---------- the chat for one run ----------
+// ---------- the chat for one thread (one or more runs that continue each other) ----------
 
-export function Chat({ id, task, onNewRun }: { id: string; task: string; onNewRun: (text: string, kind: string, model: string) => void }) {
-  const [v, setV] = useState<View>(empty)
+const FINISHED = new Set(['done', 'failed', 'cancelled'])
+const clean = (task: string) => task.replace(/^\[[^\]]+\]\s*/, '')
+
+export function Chat({ runs, onSubmit }: { runs: RunRow[]; onSubmit: (text: string, kind: string, model: string, continueFrom?: string) => void }) {
+  const [views, setViews] = useState<Record<string, View>>({})
   const bottom = useRef<HTMLDivElement>(null)
-  useEffect(() => { setV(empty()); return api.stream(id, (e) => setV((prev) => reduce(prev, e))) }, [id])
-  useEffect(() => { bottom.current?.scrollIntoView({ block: 'end' }) }, [v.lastId])
+  const last = runs[runs.length - 1]
+  const lv = views[last.id] ?? empty()
+  const lastIds = runs.map((r) => views[r.id]?.lastId ?? 0).join(',')
+  useEffect(() => { bottom.current?.scrollIntoView({ block: 'end' }) }, [lastIds])
 
-  const finished = v.state === 'done' || v.state === 'failed' || v.state === 'cancelled'
-  const revising = v.pending?.kind === 'confirm_intake'
+  const finished = FINISHED.has(lv.state)
+  const revising = lv.pending?.kind === 'confirm_intake'
+  const all = runs.map((r) => views[r.id]).filter(Boolean)
 
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="min-h-0 flex-1 overflow-auto">
         <div className="mx-auto max-w-3xl px-5 pt-8 pb-4">
-          <UserMsg text={task} />
-          <AssistantTurn v={v} id={id} />
+          {runs.map((r) => <RunTurn key={r.id} run={r} onView={(v) => setViews((p) => (p[r.id] === v ? p : { ...p, [r.id]: v }))} />)}
           <div ref={bottom} />
         </div>
       </div>
       <div className="mx-auto w-full max-w-3xl px-5 pb-4">
-        {!finished && v.state !== 'created' && (
+        {!finished && lv.state !== 'created' && (
           <div className="mb-2 flex justify-center">
-            <Btn secondary onClick={() => api.cancel(id)}>Stop run</Btn>
+            <Btn secondary onClick={() => api.cancel(last.id)}>Stop run</Btn>
           </div>
         )}
-        {finished && <NewTaskComposer onSubmit={onNewRun} />}
+        {finished && <NewTaskComposer placeholder="Continue this thread: ask for a follow-up, a fix, or to resume where it stopped…" onSubmit={(t, k, m) => onSubmit(t, k, m, last.id)} />}
         {revising && (
           <PromptComposer
             prompts={[]}
@@ -55,12 +60,24 @@ export function Chat({ id, task, onNewRun }: { id: string; task: string; onNewRu
             models={['Opus 5.5']}
             simulate={false}
             hint={false}
-            onSubmit={(s) => api.decide(id, false, s.prompt)}
+            onSubmit={(s) => api.decide(last.id, false, s.prompt)}
           />
         )}
-        <CostStrip v={v} />
+        <CostStrip views={all} />
       </div>
     </div>
+  )
+}
+
+function RunTurn({ run, onView }: { run: RunRow; onView: (v: View) => void }) {
+  const [v, setV] = useState<View>(empty)
+  useEffect(() => { setV(empty()); return api.stream(run.id, (e) => setV((prev) => reduce(prev, e))) }, [run.id])
+  useEffect(() => onView(v), [v])
+  return (
+    <>
+      <UserMsg text={clean(run.task)} />
+      <div className="mb-10"><AssistantTurn v={v} id={run.id} /></div>
+    </>
   )
 }
 
@@ -252,14 +269,16 @@ function Tool({ c, child }: { c: ToolCall; child?: Agent }) {
 
 // ---------- cost strip ----------
 
-function CostStrip({ v }: { v: View }) {
+function CostStrip({ views }: { views: View[] }) {
   const [open, setOpen] = useState(false)
-  const rows = v.order.map((id) => v.agents[id])
+  const rows = views.flatMap((v) => v.order.map((id) => v.agents[id]))
+  const cost = views.reduce((n, v) => n + v.cost, 0)
+  const tok = views.reduce((t, v) => ({ in: t.in + v.tokens.in, out: t.out + v.tokens.out, cache: t.cache + v.tokens.cache }), { in: 0, out: 0, cache: 0 })
   if (!rows.length) return null
   return (
     <div className="mt-2 text-xs" style={{ color: 'var(--dim)' }}>
       <button className="mono w-full py-1 text-center hover:text-white/80" onClick={() => setOpen(!open)}>
-        {usd(v.cost)} · {k(v.tokens.in)} in · {k(v.tokens.out)} out · {k(v.tokens.cache)} cached {open ? '▾' : '▸'}
+        {usd(cost)} · {k(tok.in)} in · {k(tok.out)} out · {k(tok.cache)} cached{views.length > 1 ? ` · ${views.length} runs` : ''} {open ? '▾' : '▸'}
       </button>
       {open && (
         <div className="glass rounded-2xl p-3">
@@ -267,7 +286,7 @@ function CostStrip({ v }: { v: View }) {
             <div key={a.id} className="flex items-center gap-2 py-0.5" style={{ color: 'var(--muted)' }}>
               <span className="w-24 truncate">{a.name}</span>
               <span className="mono w-28">{a.model.replace('claude-', '')}</span>
-              <div className="h-1 flex-1 rounded" style={{ background: 'rgba(255,255,255,.08)' }}><div className="h-1 rounded" style={{ width: `${v.cost ? (a.cost / v.cost) * 100 : 0}%`, background: 'linear-gradient(90deg,#5fb2f2,#e8f6ff)' }} /></div>
+              <div className="h-1 flex-1 rounded" style={{ background: 'rgba(255,255,255,.08)' }}><div className="h-1 rounded" style={{ width: `${cost ? (a.cost / cost) * 100 : 0}%`, background: 'linear-gradient(90deg,#5fb2f2,#e8f6ff)' }} /></div>
               <span className="mono w-16 text-right">{k(a.tokens.in + a.tokens.out)}</span>
               <span className="mono w-16 text-right">{usd(a.cost)}</span>
             </div>

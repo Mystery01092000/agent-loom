@@ -121,3 +121,36 @@ def test_orphan_sweep_closes_runs_left_working():
     for rid in ("r1", "r2"):
         assert s.run(rid)["state"] == "cancelled"
         assert s.events(rid, types=["state"])[-1]["payload"]["state"] == "cancelled"
+
+
+def _finish(c: TestClient, run_id: str):
+    _wait(c, run_id, lambda r: r["pending"] and r["pending"]["kind"] == "confirm_intake")
+    c.post(f"/runs/{run_id}/decide", json={"approved": True})
+    r = _wait(c, run_id, lambda r: r["state"] == "done" or (r["pending"] and r["pending"]["kind"] == "want_pr"))
+    if r["pending"]:  # no PR prompt when there was nothing to commit
+        c.post(f"/runs/{run_id}/decide", json={"approved": False})
+    return _wait(c, run_id, lambda r: r["state"] == "done")
+
+
+def test_continue_run_shares_thread_branch_and_context(client: TestClient, tmp_path: Path):
+    repo = _repo(tmp_path)
+    first = client.post("/runs", json={"task": "add b.txt", "cwd": str(repo)}).json()["id"]
+    r1 = _finish(client, first)
+    assert r1["thread_id"] == first and r1["branch"] == "harness/add-b-txt"
+
+    assert client.post("/runs", json={"task": "x", "continue_from": "nope"}).status_code == 404
+    second = client.post("/runs", json={"task": "also add c.txt", "continue_from": first}).json()["id"]
+    r2 = _finish(client, second)
+    assert r2["thread_id"] == first and r2["cwd"] == r1["cwd"]
+    assert r2["branch"] == "harness/add-b-txt"  # continued on the same branch, no new one
+    branches = subprocess.run(["git", "branch"], cwd=repo, capture_output=True, text=True).stdout
+    assert branches.count("harness/") == 1
+
+    # the intake prompt of the continuation carries the thread history
+    live = api.app.state.live[second]
+    first_prompt = live.run.request
+    assert "History of this thread" in first_prompt and "add b.txt" in first_prompt and "The user now says:\nalso add c.txt" in first_prompt
+
+    thread = client.get("/runs", params={"thread": first}).json()
+    assert [r["id"] for r in thread] == [first, second]
+    assert all("thread_id" in r for r in client.get("/runs").json())
