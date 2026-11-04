@@ -95,3 +95,13 @@ def test_failure_sets_state(repo: Path):
     with pytest.raises(json.JSONDecodeError):
         run.run()
     assert run.state == "failed"
+
+
+def test_commit_skips_pycache(repo: Path):
+    (repo / "__pycache__").mkdir()
+    (repo / "__pycache__" / "app.cpython-313.pyc").write_bytes(b"\x00")
+    (repo / "new.py").write_text("y = 2\n")
+    assert git.commit_all(repo, "c")
+    tracked = subprocess.run(["git", "ls-files"], cwd=repo, capture_output=True, text=True).stdout.split()
+    assert "new.py" in tracked and not any("pycache" in t for t in tracked)
+    assert "pycache" not in git.diff(repo)

@@ -34,19 +34,28 @@ def current_branch(cwd: Path) -> str:
     return _git(cwd, "branch", "--show-current")
 
 
+JUNK = ["__pycache__", "*.pyc", ".pytest_cache", "node_modules", ".venv", "*.egg-info"]
+
+
+def _stage(cwd: Path, *flags: str) -> None:
+    """Stage everything except build junk, even when the repo has no .gitignore."""
+    _git(cwd, "add", *flags, ".")
+    _git(cwd, "reset", "-q", "--", *JUNK)
+
+
 def diff(cwd: Path, max_chars: int = 60_000) -> str:
-    _git(cwd, "add", "-N", ".")  # make untracked files show in diff
+    _stage(cwd, "-N")  # intent-to-add so untracked files show in diff
     d = _git(cwd, "diff")
     return d if len(d) <= max_chars else d[:max_chars] + "\n...(diff truncated)"
 
 
 def diff_stat(cwd: Path) -> str:
-    _git(cwd, "add", "-N", ".")
+    _stage(cwd, "-N")
     return _git(cwd, "diff", "--stat")
 
 
 def commit_all(cwd: Path, message: str) -> str:
-    _git(cwd, "add", "-A")
+    _stage(cwd, "-A")
     if not _git(cwd, "status", "--porcelain"):
         return ""
     _git(cwd, "commit", "-q", "-m", message, check=True)

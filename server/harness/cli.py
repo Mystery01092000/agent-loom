@@ -68,6 +68,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--max-cost", type=float, default=20.0)
     ap.add_argument("--worker", action="store_true", help="run a single worker agent instead of the lifecycle")
     a = ap.parse_args(argv)
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")  # Windows consoles default to cp1252 and choke on model output
 
     bus = EventBus()
     bus.subscribe(_print)
