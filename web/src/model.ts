@@ -58,7 +58,7 @@ export function reduce(v: View, e: Ev): View {
       if (p.intake) n.intake = p.intake
       if (p.summary) n.summary = p.summary
       if (p.error) n.error = p.error
-      if (p.state === 'done' || p.state === 'failed') n.pending = null
+      if (p.state === 'done' || p.state === 'failed' || p.state === 'cancelled') n.pending = null
       break
     case 'agent_start': {
       const a = agent(); a.name = p.name; a.model = p.model; a.effort = p.effort

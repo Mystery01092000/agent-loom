@@ -28,7 +28,7 @@ export function Chat({ id, task, onNewRun }: { id: string; task: string; onNewRu
   useEffect(() => { setV(empty()); return api.stream(id, (e) => setV((prev) => reduce(prev, e))) }, [id])
   useEffect(() => { bottom.current?.scrollIntoView({ block: 'end' }) }, [v.lastId])
 
-  const finished = v.state === 'done' || v.state === 'failed'
+  const finished = v.state === 'done' || v.state === 'failed' || v.state === 'cancelled'
   const revising = v.pending?.kind === 'confirm_intake'
 
   return (
@@ -41,6 +41,11 @@ export function Chat({ id, task, onNewRun }: { id: string; task: string; onNewRu
         </div>
       </div>
       <div className="mx-auto w-full max-w-3xl px-5 pb-4">
+        {!finished && v.state !== 'created' && (
+          <div className="mb-2 flex justify-center">
+            <Btn secondary onClick={() => api.cancel(id)}>Stop run</Btn>
+          </div>
+        )}
         {finished && <NewTaskComposer onSubmit={onNewRun} />}
         {revising && (
           <PromptComposer
@@ -150,6 +155,7 @@ function AssistantTurn({ v, id }: { v: View; id: string }) {
         )}
         {v.pr && <p className="text-sm">PR opened: <a className="underline" style={{ color: 'var(--accent)' }} href={v.pr} target="_blank">{v.pr}</a></p>}
         {v.state === 'done' && !v.pr && v.branch && <p className="text-sm" style={{ color: 'var(--muted)' }}>Done. The work is committed on {v.branch}.</p>}
+        {v.state === 'cancelled' && <p className="text-sm" style={{ color: 'var(--warn)' }}>Stopped. {v.branch ? `Any partial work is left uncommitted on ${v.branch}.` : ''}</p>}
         {v.error && <pre className="rounded-xl p-3 text-sm" style={{ background: 'var(--code)', color: 'var(--err)' }}>{v.error}</pre>}
       </div>
     </div>

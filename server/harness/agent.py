@@ -1,6 +1,7 @@
 """Single-agent loop: stream a turn, run tools, append, repeat. History is append-only (preserved thinking)."""
 from __future__ import annotations
 
+import threading
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
@@ -53,6 +54,7 @@ def run_agent(
     run_id: str,
     agent_id: str | None = None,
     parent_id: str | None = None,
+    cancel: threading.Event | None = None,
 ) -> RunResult:
     agent_id = agent_id or f"{agent.name}-{uuid.uuid4().hex[:6]}"
     total = {"input_tokens": 0, "output_tokens": 0, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}
@@ -70,10 +72,14 @@ def run_agent(
         output_config["format"] = {"type": "json_schema", "schema": agent.output_schema}
 
     for turn in range(1, agent.max_turns + 1):
+        if cancel is not None and cancel.is_set():
+            stop = "cancelled"
+            break
         with client.beta.messages.stream(
             model=agent.model,
             max_tokens=agent.max_tokens,
             system=[{"type": "text", "text": agent.system, "cache_control": {"type": "ephemeral"}}],
+            cache_control={"type": "ephemeral"},  # also cache the growing conversation tail
             messages=messages,
             tools=schemas(agent.tools, registry),
             thinking={"type": "adaptive", "display": "summarized"},

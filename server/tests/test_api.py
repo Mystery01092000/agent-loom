@@ -94,3 +94,14 @@ def test_stream_replays_finished_run(client: TestClient, tmp_path: Path):
     with client.stream("GET", f"/runs/{run_id}/stream") as s:
         body = "".join(s.iter_text())
     assert body.count("event: ") >= 10 and '"state": "done"' in body
+
+
+def test_cancel_unblocks_pending_decision(client: TestClient, tmp_path: Path):
+    repo = _repo(tmp_path)
+    run_id = client.post("/runs", json={"task": "x", "cwd": str(repo)}).json()["id"]
+    _wait(client, run_id, lambda r: r["pending"])
+    assert client.post(f"/runs/{run_id}/cancel").json() == {"ok": True}
+    r = _wait(client, run_id, lambda r: r["state"] == "cancelled")
+    assert r["pending"] is None
+    assert client.post(f"/runs/{run_id}/cancel").status_code == 409
+    assert any(e["payload"].get("state") == "cancelled" for e in client.get(f"/runs/{run_id}/events", params={"types": "state"}).json())

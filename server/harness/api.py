@@ -169,6 +169,17 @@ def decide(run_id: str, body: Decision) -> dict[str, Any]:
     return {"ok": True}
 
 
+@app.post("/runs/{run_id}/cancel")
+def cancel(run_id: str) -> dict[str, Any]:
+    live = app.state.live.get(run_id)
+    if not live or live.run.state in ("done", "failed", "cancelled"):
+        raise HTTPException(409, "run is not active")
+    live.run.cancel()
+    if live.io.pending:  # unblock a thread waiting on a decision
+        live.io.q.put({"approved": False, "feedback": "cancelled"})
+    return {"ok": True}
+
+
 @app.get("/runs/{run_id}/stream")
 async def stream(run_id: str, after: int = 0) -> EventSourceResponse:
     store: Store = app.state.store
@@ -186,14 +197,14 @@ async def stream(run_id: str, after: int = 0) -> EventSourceResponse:
             for ev in store.events(run_id, after):  # replay
                 last = ev["id"]
                 yield {"event": ev["type"], "id": str(ev["id"]), "data": json.dumps(ev)}
-            if not live or live.run.state in ("done", "failed"):
+            if not live or live.run.state in ("done", "failed", "cancelled"):
                 return
             while True:
                 ev = await q.get()
                 if ev["id"] <= last:
                     continue
                 yield {"event": ev["type"], "id": str(ev["id"]), "data": json.dumps(ev)}
-                if ev["type"] == "state" and ev["payload"]["state"] in ("done", "failed"):
+                if ev["type"] == "state" and ev["payload"]["state"] in ("done", "failed", "cancelled"):
                     return
         finally:
             if live and q in live.subscribers:

@@ -5,6 +5,7 @@ User decisions go through UserIO so the CLI (input()) and the API (queues) share
 from __future__ import annotations
 
 import json
+import threading
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -91,10 +92,18 @@ class Run:
     commit: str = ""
     pr_url: str = ""
     cost_usd: float = 0.0
+    cancelled: threading.Event = field(default_factory=threading.Event)
     _workers: int = 0
 
     def __post_init__(self) -> None:
         self.bus.subscribe(self._track_cost)
+
+    def cancel(self) -> None:
+        self.cancelled.set()
+
+    def _check_cancel(self) -> None:
+        if self.cancelled.is_set():
+            raise RuntimeError("cancelled by user")
 
     def _track_cost(self, ev: Event) -> None:
         if ev.type == "usage":
@@ -111,9 +120,12 @@ class Run:
         return AgentDef(name=name, system=system, model=self.main_model, effort="high", max_cost_usd=self.max_cost_usd, **kw)
 
     def _run(self, agent: AgentDef, prompt: str, parent: str | None = None) -> RunResult:
+        self._check_cancel()
         if self.cost_usd > self.max_cost_usd:
             raise RuntimeError(f"run cost ${self.cost_usd:.2f} exceeds cap ${self.max_cost_usd:.2f}")
-        return run_agent(self.client, agent, [{"role": "user", "content": prompt}], self._ctx(), self.bus, run_id=self.id, parent_id=parent)
+        res = run_agent(self.client, agent, [{"role": "user", "content": prompt}], self._ctx(), self.bus, run_id=self.id, parent_id=parent, cancel=self.cancelled)
+        self._check_cancel()
+        return res
 
     # --- phases -------------------------------------------------------------
 
@@ -161,7 +173,9 @@ class Run:
         prompt = f"User request:\n{self.task}\n\nConfirmed understanding and plan:\n{json.dumps(self.intake, indent=2)}"
         if extra:
             prompt += f"\n\n{extra}"
-        res = run_agent(self.client, agent, [{"role": "user", "content": prompt}], self._ctx(), self.bus, run_id=self.id, agent_id=self._supervisor_id)
+        self._check_cancel()
+        res = run_agent(self.client, agent, [{"role": "user", "content": prompt}], self._ctx(), self.bus, run_id=self.id, agent_id=self._supervisor_id, cancel=self.cancelled)
+        self._check_cancel()
         return res.text
 
     def run_diagnosis(self) -> dict[str, Any]:
@@ -207,6 +221,9 @@ class Run:
                 self.bus.emit(Event("pr", self.id, "run", {"url": self.pr_url}))
             self._set("done", cost_usd=self.cost_usd, branch=self.branch, commit=self.commit, pr_url=self.pr_url)
         except Exception as e:
+            if self.cancelled.is_set():
+                self._set("cancelled", cost_usd=self.cost_usd, branch=self.branch)
+                return self
             self._set("failed", error=f"{type(e).__name__}: {e}", cost_usd=self.cost_usd)
             raise
         return self

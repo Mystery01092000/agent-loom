@@ -37,7 +37,7 @@ export default function App() {
             <button key={r.id} className="mb-1 block w-full rounded-xl px-3 py-2 text-left text-sm transition hover:bg-white/5" style={{ background: sel === r.id ? 'rgba(255,255,255,.08)' : undefined }} onClick={() => setSel(r.id)}>
               <div className="truncate">{r.task.replace(/^\[[^\]]+\]\s*/, '')}</div>
               <div className="mono mt-0.5 flex text-[11px]" style={{ color: 'var(--dim)' }}>
-                <span style={{ color: r.state === 'done' ? 'var(--ok)' : r.state === 'failed' ? 'var(--err)' : 'var(--warn)' }}>{r.state.replace(/_/g, ' ')}</span>
+                <span style={{ color: r.state === 'done' ? 'var(--ok)' : r.state === 'failed' || r.state === 'cancelled' ? 'var(--err)' : 'var(--warn)' }}>{r.state.replace(/_/g, ' ')}</span>
                 <span className="ml-auto">{usd(r.cost_usd)}</span>
               </div>
             </button>
