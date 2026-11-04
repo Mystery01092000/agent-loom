@@ -145,8 +145,11 @@ def execute(ctx: ToolContext, name: str, inp: Any, allowed: list[str]) -> tuple[
     if name not in allowed or name not in TOOLS:
         return f"tool not allowed: {name}", True
     schema, fn = TOOLS[name]
-    props = schema["input_schema"]["properties"]
-    if not isinstance(inp, dict) or set(inp) != set(props) or not all(isinstance(inp[k], str) for k in props):
+    props = schema["input_schema"].get("properties", {})
+    required = schema["input_schema"].get("required", [])
+    if not isinstance(inp, dict) or not set(required) <= set(inp) or not set(inp) <= set(props):
+        return f"invalid input for {name}: {inp!r}", True
+    if schema.get("strict") and not all(isinstance(inp[k], str) for k in inp):
         return f"invalid input for {name}: {inp!r}", True
     try:
         return fn(ctx, **inp), False

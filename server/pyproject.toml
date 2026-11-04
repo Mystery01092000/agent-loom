@@ -5,6 +5,7 @@ description = "Agentic harness: supervisor/worker/diagnosis/summarizer agents on
 requires-python = ">=3.12"
 dependencies = [
     "anthropic>=1.1.0",
+    "mcp>=2.3.0",
 ]
 
 [dependency-groups]
