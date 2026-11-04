@@ -7,7 +7,7 @@ from typing import Any
 
 from .events import Event, EventBus
 from .pricing import cost_usd
-from .tools import ALL_TOOLS, ToolContext, execute, schemas
+from .tools import ALL_TOOLS, TOOLS, Registry, ToolContext, execute, schemas
 
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
 
@@ -23,6 +23,8 @@ class AgentDef:
     max_tokens: int = 64_000  # per response
     max_tokens_total: int = 2_000_000  # in + out across the run
     max_cost_usd: float = 10.0
+    output_schema: dict[str, Any] | None = None  # structured output: final text is JSON matching this
+    extra_tools: Registry = field(default_factory=dict)  # per-run tools (e.g. spawn_worker), merged over TOOLS
 
 
 @dataclass
@@ -62,6 +64,10 @@ def run_agent(
         bus.emit(Event(type_, run_id, agent_id, payload, parent_id, turn))
 
     emit("agent_start", name=agent.name, model=agent.model, effort=agent.effort, tools=agent.tools)
+    registry: Registry = {**TOOLS, **agent.extra_tools}
+    output_config: dict[str, Any] = {"effort": agent.effort}
+    if agent.output_schema:
+        output_config["format"] = {"type": "json_schema", "schema": agent.output_schema}
 
     for turn in range(1, agent.max_turns + 1):
         with client.beta.messages.stream(
@@ -69,9 +75,9 @@ def run_agent(
             max_tokens=agent.max_tokens,
             system=[{"type": "text", "text": agent.system, "cache_control": {"type": "ephemeral"}}],
             messages=messages,
-            tools=schemas(agent.tools),
+            tools=schemas(agent.tools, registry),
             thinking={"type": "adaptive", "display": "summarized"},
-            output_config={"effort": agent.effort},
+            output_config=output_config,
             betas=[FALLBACK_BETA],
             fallbacks="default",
         ) as stream:
@@ -110,7 +116,7 @@ def run_agent(
         results = []
         for tu in tool_uses:
             emit("tool_call", turn, tool_use_id=tu.id, name=tu.name, input=tu.input)
-            out, is_err = execute(ctx, tu.name, tu.input, agent.tools)
+            out, is_err = execute(ctx, tu.name, tu.input, agent.tools, registry)
             emit("tool_result", turn, tool_use_id=tu.id, name=tu.name, is_error=is_err, output=out[:4000])
             results.append({"type": "tool_result", "tool_use_id": tu.id, "content": out, "is_error": is_err})
         messages.append({"role": "user", "content": results})

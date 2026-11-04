@@ -11,8 +11,8 @@ Legend: **Dev** = code written Â· **Tested** = automated tests pass Â· **Live** 
 | P1 CLI | x |  |  | x | Live needs ANTHROPIC_API_KEY |
 | P2 guardrails (allowlist, budgets, denylist, approval) | x | x | n/a | x | landed in P1 |
 | P2 MCP | x | x | x | x | mcp 2.x stdio; verified against a real local MCP server in tests |
-| P3 lifecycle (intake/supervisor/worker/diagnosis/summarizer) | | | | | |
-| P3 git branch + PR | | | | | |
+| P3 lifecycle (intake/supervisor/worker/diagnosis/summarizer) | x | x | | x | Live needs ANTHROPIC_API_KEY |
+| P3 git branch + PR | x | x | | x | branch+commit tested on a real temp repo; gh pr create not exercised |
 | P4 SQLite store | | | n/a | | |
 | P4 FastAPI + SSE | | | | | |
 | P5 UI | | | | | |
@@ -20,3 +20,4 @@ Legend: **Dev** = code written Â· **Tested** = automated tests pass Â· **Live** 
 ## Commits ready to push
 - `feat: phase 1 core loop` — events, pricing, tools, agent loop, CLI, 10 tests green
 - `feat: phase 2 MCP bridge` — mcp.json stdio servers registered as mcp__<server>__<tool>, 11 tests green
+- `feat: phase 3 lifecycle` — Run state machine, 5 agents, spawn_worker, structured intake/diagnosis, branch+commit+PR, 14 tests green

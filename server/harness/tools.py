@@ -136,15 +136,20 @@ TOOLS: dict[str, tuple[dict[str, Any], Callable[..., str]]] = {
 ALL_TOOLS = list(TOOLS)
 
 
-def schemas(names: list[str]) -> list[dict[str, Any]]:
-    return [{"name": n, **TOOLS[n][0]} for n in names]
+Registry = dict[str, tuple[dict[str, Any], Callable[..., str]]]
 
 
-def execute(ctx: ToolContext, name: str, inp: Any, allowed: list[str]) -> tuple[str, bool]:
+def schemas(names: list[str], registry: Registry | None = None) -> list[dict[str, Any]]:
+    reg = registry if registry is not None else TOOLS
+    return [{"name": n, **reg[n][0]} for n in names]
+
+
+def execute(ctx: ToolContext, name: str, inp: Any, allowed: list[str], registry: Registry | None = None) -> tuple[str, bool]:
     """Returns (text, is_error)."""
-    if name not in allowed or name not in TOOLS:
+    reg = registry if registry is not None else TOOLS
+    if name not in allowed or name not in reg:
         return f"tool not allowed: {name}", True
-    schema, fn = TOOLS[name]
+    schema, fn = reg[name]
     props = schema["input_schema"].get("properties", {})
     required = schema["input_schema"].get("required", [])
     if not isinstance(inp, dict) or not set(required) <= set(inp) or not set(inp) <= set(props):
