@@ -15,7 +15,7 @@ Legend: **Dev** = code written Â· **Tested** = automated tests pass Â· **Live** 
 | P3 git branch + PR | x | x | partial | x | branch+commit live; gh pr create needs a repo with origin |
 | P4 SQLite store | x | x | n/a | x | |
 | P4 FastAPI + SSE | x | x | x | x | drove the live run through the API |
-| P5 UI | x | x | x | x | Verified in Chrome against the real API with a scripted LLM: live SSE, intake confirm, agent tree w/ thinking+tools, cost ticker, PR decision |
+| P5 UI | x | x | x | x | Redesigned as a Claude-style chat: user bubble, assistant prose (markdown), collapsible agent steps w/ nested workers + thinking, inline decisions, cost strip at the bottom. Verified live in Chrome on the Go todo-api run |
 
 ## How to run
 ```bash
@@ -35,3 +35,4 @@ cd server && uv run python -m harness.cli "task" --cwd <repo> # terminal flow
 - `feat: phase 4 store + API` — SQLite events/usage, FastAPI runs/decide/events/cost, SSE stream, 16 tests green
 - `feat: phase 5 React UI` — runs sidebar, conversation + decision gates, agent trace, cost panel; `npm run build` green
 - `fix: exclude build junk from commits` — diagnosis agent caught __pycache__ being committed on repos without .gitignore; 17 tests green
+- `feat: chat-style UI` — markdown replies, collapsible steps, inline decisions, cost strip; live-verified on a Go project build ($0.55, 23 calls, go build/vet/test pass)

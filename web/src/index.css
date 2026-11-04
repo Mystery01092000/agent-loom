@@ -1,17 +1,34 @@
 @import "tailwindcss";
 
 :root {
-  color-scheme: dark;
-  --bg: #0b0d12;
-  --panel: #12151c;
-  --panel-2: #181c25;
-  --border: #242936;
-  --text: #e6e8ee;
-  --muted: #8b93a7;
+  color-scheme: light dark;
+  --bg: #faf9f5;
+  --panel: #f1efe8;
+  --panel-2: #e9e6dc;
+  --border: #e3dfd3;
+  --text: #1f1e1b;
+  --muted: #7d7a70;
   --accent: #d97757;
-  --ok: #4ade80;
-  --warn: #fbbf24;
-  --err: #f87171;
+  --user: #ebe8de;
+  --ok: #2f8f5b;
+  --warn: #b7791f;
+  --err: #c0392b;
+  --code: #f3f1ea;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1f1e1b;
+    --panel: #262521;
+    --panel-2: #2f2d28;
+    --border: #3a3833;
+    --text: #ecebe6;
+    --muted: #9b978d;
+    --user: #2f2d28;
+    --ok: #4ade80;
+    --warn: #e0a84a;
+    --err: #f06b5b;
+    --code: #17171a;
+  }
 }
 
 html, body, #root { height: 100%; margin: 0; }
@@ -19,10 +36,26 @@ body {
   background: var(--bg);
   color: var(--text);
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Inter, sans-serif;
-  font-size: 14px;
+  font-size: 15px;
+  line-height: 1.55;
 }
 code, pre, .mono { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: 12.5px; }
 pre { white-space: pre-wrap; word-break: break-word; }
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
-.thinking { color: var(--muted); font-style: italic; }
+
+/* markdown */
+.md > :first-child { margin-top: 0; }
+.md > :last-child { margin-bottom: 0; }
+.md p, .md ul, .md ol { margin: 0.5em 0; }
+.md ul, .md ol { padding-left: 1.4em; }
+.md ol { list-style: decimal; }
+.md ul { list-style: disc; }
+.md li { margin: 0.15em 0; }
+.md h1, .md h2, .md h3 { font-weight: 600; margin: 0.9em 0 0.35em; line-height: 1.3; }
+.md h1 { font-size: 1.2em; } .md h2 { font-size: 1.1em; } .md h3 { font-size: 1em; }
+.md code { background: var(--code); padding: 0.1em 0.35em; border-radius: 4px; }
+.md pre { background: var(--code); padding: 0.7em 0.9em; border-radius: 8px; overflow: auto; }
+.md pre code { background: none; padding: 0; }
+.md a { color: var(--accent); text-decoration: underline; }
+.md strong { font-weight: 600; }

@@ -47,10 +47,14 @@ export const api = {
   cost: (id: string) => j<Cost>(fetch(`${BASE}/runs/${id}/cost`)),
   stream(id: string, onEvent: (e: Ev) => void): () => void {
     const es = new EventSource(`${BASE}/runs/${id}/stream`)
-    es.onmessage = (m) => onEvent(JSON.parse(m.data))
+    const handle = (m: Event) => {
+      const data = (m as MessageEvent).data
+      if (typeof data === 'string' && data.startsWith('{')) onEvent(JSON.parse(data))
+    }
+    es.onmessage = handle
     // sse-starlette sends named events; EventSource only fires onmessage for unnamed ones.
     const types = ['state', 'agent_start', 'agent_end', 'thinking', 'text', 'tool_call', 'tool_result', 'usage', 'error', 'decision_needed', 'decision', 'branch', 'pr', 'diagnosis']
-    for (const t of types) es.addEventListener(t, (m) => onEvent(JSON.parse((m as MessageEvent).data)))
+    for (const t of types) es.addEventListener(t, handle)
     es.onerror = () => es.close()
     return () => es.close()
   },
