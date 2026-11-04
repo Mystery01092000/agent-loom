@@ -73,8 +73,24 @@ class Decision(BaseModel):
     feedback: str = ""
 
 
+TERMINAL = ("done", "failed", "cancelled")
+
+
+def _orphan_sweep(store: Store) -> None:
+    """Runs left mid-flight by a crash or restart can never resume: close them out in both the row and the log."""
+    for r in store.runs():
+        last = store.events(r["id"], types=["state"])
+        last_state = last[-1]["payload"]["state"] if last else r["state"]
+        if r["state"] not in TERMINAL or last_state not in TERMINAL:
+            state = r["state"] if r["state"] in TERMINAL else "cancelled"
+            store.update_run(r["id"], state=state)
+            if last_state != state:
+                store.append(Event("state", r["id"], "run", {"state": state, "error": "server restarted while the run was active"}))
+
+
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
+    _orphan_sweep(app.state.store)
     cfg = Path(os.environ.get("HARNESS_MCP", "mcp.json"))
     app.state.mcp = load_mcp(cfg) if cfg.is_file() else None
     yield

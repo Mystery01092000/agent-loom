@@ -105,3 +105,19 @@ def test_cancel_unblocks_pending_decision(client: TestClient, tmp_path: Path):
     assert r["pending"] is None
     assert client.post(f"/runs/{run_id}/cancel").status_code == 409
     assert any(e["payload"].get("state") == "cancelled" for e in client.get(f"/runs/{run_id}/events", params={"types": "state"}).json())
+
+
+def test_orphan_sweep_closes_runs_left_working():
+    from harness.api import _orphan_sweep
+    from harness.events import Event
+    s = Store(":memory:")
+    s.create_run("r1", "t", ".")
+    s.update_run("r1", state="working")
+    s.append(Event("state", "r1", "run", {"state": "working"}))
+    s.create_run("r2", "t", ".")
+    s.update_run("r2", state="cancelled")  # row fixed by hand, log still says working
+    s.append(Event("state", "r2", "run", {"state": "working"}))
+    _orphan_sweep(s)
+    for rid in ("r1", "r2"):
+        assert s.run(rid)["state"] == "cancelled"
+        assert s.events(rid, types=["state"])[-1]["payload"]["state"] == "cancelled"
