@@ -21,7 +21,7 @@ from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
 from .events import Event, EventBus
-from .lifecycle import Run
+from .lifecycle import Run, thread_context
 from .mcp_tools import load_mcp
 from .store import Store
 
@@ -70,20 +70,18 @@ class StartRun(BaseModel):
 
 
 def _thread_context(store: Store, thread_id: str) -> str:
-    """Everything the next run needs to know about the earlier runs of a thread: requests, outcomes, summaries, open gaps."""
-    parts = ["This continues earlier work in the same repository and on the same branch. History of this thread:"]
-    for i, r in enumerate(store.runs(thread_id), 1):
+    """Rebuild the thread history from the event log and hand it to lifecycle.thread_context."""
+    history = []
+    for r in store.runs(thread_id):
         evs = store.events(r["id"], types=["state", "diagnosis"])
-        summary = next((e["payload"]["summary"] for e in reversed(evs) if e["payload"].get("summary")), "")
-        diag = next((e["payload"] for e in reversed(evs) if e["type"] == "diagnosis"), None)
-        parts.append(f"\n--- Run {i} ({r['state']}, branch {r['branch'] or 'none'}) ---\nRequest:\n{r['task']}")
-        if diag:
-            parts.append(f"Diagnosis: complete={diag.get('complete')} gaps={json.dumps(diag.get('gaps', []))}")
-        if summary:
-            parts.append(f"Summary:\n{summary}")
-        if r["state"] in ("cancelled", "failed"):
-            parts.append("This run did not finish; any partial changes may still be uncommitted in the working tree. Check `git status` and `git diff` before planning.")
-    return "\n".join(parts)
+        history.append({
+            "task": r["task"],
+            "state": r["state"],
+            "branch": r["branch"],
+            "summary": next((e["payload"]["summary"] for e in reversed(evs) if e["payload"].get("summary")), ""),
+            "diagnosis": next((e["payload"] for e in reversed(evs) if e["type"] == "diagnosis"), None),
+        })
+    return thread_context(history)
 
 
 class Decision(BaseModel):

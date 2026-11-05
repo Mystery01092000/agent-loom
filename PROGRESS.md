@@ -43,3 +43,4 @@ cd server && uv run python -m harness.cli "task" --cwd <repo> # terminal flow
 - `feat: thread continuation` — runs grouped into threads; typing under a finished/cancelled run continues on the same branch with thread history as intake context; orphan sweep on restart; 20 tests green
 - `feat: .harness config layer` — agents as markdown (defaults + repo overrides), instructions.md, guardrails.json (deny/ask/allow), hooks.json (pre_tool blocks, post_tool, state), skills/ + load_skill tool, evals runner with 3 cases, examples/.harness; 28 tests green
 - `feat: rich CLI` — header, phase rules, streamed thinking, tool steps, intake/summary panels, cost table; live-verified
+- `feat: interactive CLI session` — prompt loop, /new /cost /help /quit, thread continuation shared with the API via lifecycle.thread_context

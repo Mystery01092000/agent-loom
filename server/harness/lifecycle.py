@@ -39,6 +39,21 @@ DIAG_SCHEMA = {
 }
 
 
+def thread_context(history: list[dict[str, Any]]) -> str:
+    """What the next run of a thread needs to know about the earlier ones. Each entry: task, state, branch, diagnosis, summary."""
+    parts = ["This continues earlier work in the same repository and on the same branch. History of this thread:"]
+    for i, r in enumerate(history, 1):
+        parts.append(f"\n--- Run {i} ({r.get('state')}, branch {r.get('branch') or 'none'}) ---\nRequest:\n{r.get('task', '')}")
+        diag = r.get("diagnosis")
+        if diag:
+            parts.append(f"Diagnosis: complete={diag.get('complete')} gaps={json.dumps(diag.get('gaps', []))}")
+        if r.get("summary"):
+            parts.append(f"Summary:\n{r['summary']}")
+        if r.get("state") in ("cancelled", "failed"):
+            parts.append("This run did not finish; any partial changes may still be uncommitted in the working tree. Check `git status` and `git diff` before planning.")
+    return "\n".join(parts)
+
+
 class UserIO(Protocol):
     def confirm_intake(self, intake: dict[str, Any]) -> tuple[bool, str]: ...  # (approved, feedback)
     def approve_command(self, command: str) -> bool: ...

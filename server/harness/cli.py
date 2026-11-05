@@ -24,7 +24,7 @@ from rich.text import Text
 from .agent import AgentDef, run_agent
 from .config import load_config
 from .events import Event, EventBus
-from .lifecycle import Run
+from .lifecycle import Run, thread_context
 from .tools import ToolContext
 
 console = Console(highlight=False)
@@ -182,50 +182,124 @@ def _report(run: Run, printer: Printer) -> None:
     console.print(Panel("\n".join(lines), border_style=color))
 
 
+HELP = """[bold]Type a task[/] and press Enter. Intake proposes a plan, you approve it, the agents do the work on a branch.
+After a run finishes, the next message [bold]continues the same thread[/] (same branch, with the history as context).
+
+  /new    start a new thread (next task gets its own branch)
+  /cost   spend so far in this session
+  /help   this text
+  /quit   leave (Ctrl+D or Ctrl+C twice also works)"""
+
+
+class Session:
+    """An interactive session: a sequence of runs in the same repo, grouped into threads like the UI."""
+
+    def __init__(self, cwd: Path, client: Any, main_model: str, worker_model: str, max_cost: float) -> None:
+        self.cwd, self.client = cwd, client
+        self.main_model, self.worker_model, self.max_cost = main_model, worker_model, max_cost
+        self.cfg = load_config(cwd)
+        self.io = TerminalIO()
+        self.history: list[Run] = []  # runs of the current thread
+        self.spent = 0.0
+
+    def new_thread(self) -> None:
+        self.history.clear()
+
+    def run(self, task: str) -> Run:
+        printer = Printer()
+        bus = EventBus()
+        bus.subscribe(printer)
+        prev = self.history[-1] if self.history else None
+        run = Run(
+            task=task, cwd=self.cwd, io=self.io, client=self.client, bus=bus, cfg=self.cfg,
+            main_model=self.main_model, worker_model=self.worker_model, max_cost_usd=self.max_cost,
+            thread_id=prev.thread_id if prev else "",
+            branch=prev.branch if prev else "",
+            prior_context=thread_context([{"task": r.task, "state": r.state, "branch": r.branch, "diagnosis": r.diagnosis, "summary": r.summary} for r in self.history]) if prev else "",
+        )
+        try:
+            run.run()
+        except KeyboardInterrupt:
+            run.cancel()
+            console.print("\n[yellow]Interrupted.[/]")
+        except Exception as e:  # state is already "failed"
+            console.print(f"[red]{type(e).__name__}: {e}[/]")
+        _report(run, printer)
+        self.history.append(run)
+        self.spent += run.cost_usd
+        return run
+
+
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(prog="harness", description="Intake → confirm → supervisor + workers → diagnosis → summary → branch/PR.")
-    ap.add_argument("task", help="what to do, in plain language")
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8")  # Windows consoles default to cp1252
+    ap = argparse.ArgumentParser(prog="harness", description="Intake → confirm → supervisor + workers → diagnosis → summary → branch/PR. With no task, opens an interactive session.")
+    ap.add_argument("task", nargs="?", help="a first task to run; omit to just open the prompt")
     ap.add_argument("--cwd", default=".", help="repository to work in (default: current directory)")
     ap.add_argument("--model", default="claude-opus-5-5", help="model for intake, supervisor, diagnosis and summary")
     ap.add_argument("--worker-model", default="claude-sonnet-5-5", help="model for workers")
-    ap.add_argument("--max-cost", type=float, default=20.0, metavar="USD", help="stop the run past this spend")
-    ap.add_argument("--worker", action="store_true", help="run a single worker agent on the task, no lifecycle")
+    ap.add_argument("--max-cost", type=float, default=20.0, metavar="USD", help="stop a run past this spend")
+    ap.add_argument("--worker", action="store_true", help="run a single worker agent on the task, no lifecycle (needs a task)")
+    ap.add_argument("--once", action="store_true", help="run the task and exit instead of opening the prompt")
     a = ap.parse_args(argv)
-    if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(encoding="utf-8")
 
     cwd = Path(a.cwd).resolve()
-    cfg = load_config(cwd)
-    printer = Printer()
-    bus = EventBus()
-    bus.subscribe(printer)
-    io = TerminalIO()
     client = anthropic.Anthropic()
+    session = Session(cwd, client, a.model, a.worker_model, a.max_cost)
 
     head = Table.grid(padding=(0, 2))
-    head.add_row("[grey50]task[/]", Text(a.task))
-    head.add_row("[grey50]repo[/]", str(cwd) + ("  [grey50](.harness found)[/]" if cfg.root else ""))
+    head.add_row("[grey50]repo[/]", str(cwd) + ("  [grey50](.harness found)[/]" if session.cfg.root else ""))
     head.add_row("[grey50]models[/]", f"{a.model.removeprefix('claude-')} / workers {a.worker_model.removeprefix('claude-')}")
-    head.add_row("[grey50]cap[/]", f"${a.max_cost:.2f}")
-    console.print(Panel(head, title="[bold]harness[/]", border_style="grey42"))
+    head.add_row("[grey50]cap[/]", f"${a.max_cost:.2f} per run")
+    console.print(Panel(head, title="[bold]harness[/]", subtitle="[grey50]/help for commands[/]", border_style="grey42"))
 
     if a.worker:
-        agent = AgentDef(name="worker", system=cfg.system_prompt("worker"), model=a.model, max_cost_usd=a.max_cost)
-        res = run_agent(client, agent, [{"role": "user", "content": a.task}], ToolContext(root=cwd, approve=io.approve_command), bus, run_id=uuid.uuid4().hex[:8])
+        if not a.task:
+            ap.error("--worker needs a task")
+        bus = EventBus()
+        bus.subscribe(Printer())
+        agent = AgentDef(name="worker", system=session.cfg.system_prompt("worker"), model=a.model, max_cost_usd=a.max_cost)
+        res = run_agent(client, agent, [{"role": "user", "content": a.task}], ToolContext(root=cwd, approve=session.io.approve_command), bus, run_id=uuid.uuid4().hex[:8])
         console.print(Panel(Markdown(res.text or "(no text)"), title="Worker report", border_style="green" if res.stop == "end_turn" else "yellow"))
         console.print(f"[grey50]${res.cost_usd:.4f} · stop={res.stop}[/]")
         return 0 if res.stop == "end_turn" else 1
 
-    run = Run(task=a.task, cwd=cwd, io=io, client=client, bus=bus, main_model=a.model, worker_model=a.worker_model, max_cost_usd=a.max_cost, cfg=cfg)
-    try:
-        run.run()
-    except KeyboardInterrupt:
-        run.cancel()
-        console.print("\n[yellow]Interrupted.[/]")
-    except Exception as e:  # state is already "failed"; show it briefly
-        console.print(f"[red]{type(e).__name__}: {e}[/]")
-    _report(run, printer)
-    return 0 if run.state == "done" else 1
+    if a.task:
+        run = session.run(a.task)
+        if a.once:
+            return 0 if run.state == "done" else 1
+
+    interrupted = False
+    while True:
+        try:
+            line = console.input("\n[bold cyan]›[/] ").strip()
+            interrupted = False
+        except EOFError:
+            break
+        except KeyboardInterrupt:
+            if interrupted:
+                break
+            interrupted = True
+            console.print("[grey50]Ctrl+C again to quit[/]")
+            continue
+        if not line:
+            continue
+        if line in ("/quit", "/exit", "/q"):
+            break
+        if line == "/help":
+            console.print(HELP)
+        elif line == "/new":
+            session.new_thread()
+            console.print("[grey50]New thread. The next task starts its own branch.[/]")
+        elif line == "/cost":
+            console.print(f"[grey50]session ${session.spent:.4f} across {len(session.history)} run(s) in this thread[/]")
+        elif line.startswith("/"):
+            console.print(f"[red]unknown command {line}[/]  [grey50]try /help[/]")
+        else:
+            session.run(line)
+    console.print(f"[grey50]bye · session ${session.spent:.4f}[/]")
+    return 0
 
 
 if __name__ == "__main__":
