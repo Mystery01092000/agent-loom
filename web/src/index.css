@@ -1,5 +1,20 @@
 @import "tailwindcss";
 
+/* shadcn-style tokens for components/ui (agent-trace uses bg-card, text-muted-foreground, bg-primary, …). */
+@theme {
+  --color-background: #08080a;
+  --color-foreground: #f5f5f6;
+  --color-card: #15161b;
+  --color-card-foreground: #f5f5f6;
+  --color-border: #2b2d36;
+  --color-muted: #23252d;
+  --color-muted-foreground: #a3a3ab;
+  --color-primary: #a9dcff;
+  --color-primary-foreground: #06233a;
+  --color-destructive: #f28b82;
+  --color-ring: #5fb2f2;
+}
+
 /* Dark liquid-glass theme, matched to components/ui/prompt-composer. */
 :root {
   color-scheme: dark;

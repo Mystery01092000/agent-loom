@@ -3,6 +3,7 @@ import { marked } from 'marked'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import PromptComposer from '@/components/ui/prompt-composer'
 import { api, type RunRow } from './api'
+import { TraceView } from './Trace'
 import { empty, k, reduce, usd, type Agent, type ToolCall, type Turn, type View } from './model'
 
 // ---------- shared bits ----------
@@ -27,11 +28,12 @@ const clean = (task: string) => task.replace(/^\[[^\]]+\]\s*/, '')
 
 export function Chat({ runs, onSubmit }: { runs: RunRow[]; onSubmit: (text: string, kind: string, model: string, continueFrom?: string) => void }) {
   const [views, setViews] = useState<Record<string, View>>({})
+  const [tab, setTab] = useState<'chat' | 'trace'>('chat')
   const bottom = useRef<HTMLDivElement>(null)
   const last = runs[runs.length - 1]
   const lv = views[last.id] ?? empty()
   const lastIds = runs.map((r) => views[r.id]?.lastId ?? 0).join(',')
-  useEffect(() => { bottom.current?.scrollIntoView({ block: 'end' }) }, [lastIds])
+  useEffect(() => { if (tab === 'chat') bottom.current?.scrollIntoView({ block: 'end' }) }, [lastIds, tab])
 
   const finished = FINISHED.has(lv.state)
   const revising = lv.pending?.kind === 'confirm_intake'
@@ -39,11 +41,24 @@ export function Chat({ runs, onSubmit }: { runs: RunRow[]; onSubmit: (text: stri
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="min-h-0 flex-1 overflow-auto">
-        <div className="mx-auto max-w-3xl px-5 pt-8 pb-4">
-          {runs.map((r) => <RunTurn key={r.id} run={r} onView={(v) => setViews((p) => (p[r.id] === v ? p : { ...p, [r.id]: v }))} />)}
-          <div ref={bottom} />
+      <div className="flex justify-center pt-2">
+        <div className="glass flex rounded-full p-1 text-xs">
+          {(['chat', 'trace'] as const).map((t) => (
+            <button key={t} className="rounded-full px-3 py-1 capitalize transition" style={{ background: tab === t ? 'rgba(255,255,255,.12)' : 'transparent', color: tab === t ? 'var(--text)' : 'var(--muted)' }} onClick={() => setTab(t)}>
+              {t}
+            </button>
+          ))}
         </div>
+      </div>
+      <div className="min-h-0 flex-1 overflow-auto">
+        {tab === 'trace' ? (
+          <TraceView runs={runs} />
+        ) : (
+          <div className="mx-auto max-w-3xl px-5 pt-6 pb-4">
+            {runs.map((r) => <RunTurn key={r.id} run={r} onView={(v) => setViews((p) => (p[r.id] === v ? p : { ...p, [r.id]: v }))} />)}
+            <div ref={bottom} />
+          </div>
+        )}
       </div>
       <div className="mx-auto w-full max-w-3xl px-5 pb-4">
         {!finished && lv.state !== 'created' && (

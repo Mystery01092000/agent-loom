@@ -47,6 +47,7 @@ export const api = {
     j<{ ok: true }>(fetch(`${BASE}/runs/${id}/decide`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ approved, feedback }) })),
   cost: (id: string) => j<Cost>(fetch(`${BASE}/runs/${id}/cost`)),
   cancel: (id: string) => j<{ ok: true }>(fetch(`${BASE}/runs/${id}/cancel`, { method: 'POST' })),
+  events: (id: string, types?: string[]) => j<Ev[]>(fetch(`${BASE}/runs/${id}/events${types ? `?types=${types.join(',')}` : ''}`)),
   stream(id: string, onEvent: (e: Ev) => void): () => void {
     const es = new EventSource(`${BASE}/runs/${id}/stream`)
     const handle = (m: Event) => {
