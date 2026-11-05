@@ -1,5 +1,8 @@
-"""python -m harness.cli "task" --cwd path   full lifecycle (intake -> supervisor -> diagnosis -> summary -> PR)
-   python -m harness.cli "task" --worker     single worker agent only."""
+"""Terminal front end for the harness.
+
+    uv run python -m harness.cli "add a hello() function with a test" --cwd ../my-repo
+    uv run python -m harness.cli "fix the flaky test" --cwd ../my-repo --worker     # one worker, no lifecycle
+"""
 from __future__ import annotations
 
 import argparse
@@ -10,6 +13,13 @@ from pathlib import Path
 from typing import Any
 
 import anthropic
+from rich.console import Console
+from rich.markdown import Markdown
+from rich.panel import Panel
+from rich.prompt import Confirm, Prompt
+from rich.rule import Rule
+from rich.table import Table
+from rich.text import Text
 
 from .agent import AgentDef, run_agent
 from .config import load_config
@@ -17,76 +27,204 @@ from .events import Event, EventBus
 from .lifecycle import Run
 from .tools import ToolContext
 
+console = Console(highlight=False)
 
-def _print(ev: Event) -> None:
-    p = ev.payload
-    if ev.type == "thinking":
-        print(f"\033[90m{p['delta']}\033[0m", end="", flush=True)
-    elif ev.type == "text":
-        print(p["delta"], end="", flush=True)
-    elif ev.type == "agent_start":
-        print(f"\n\033[1m## {ev.agent_id} ({p['model']}, effort={p['effort']})\033[0m")
-    elif ev.type == "tool_call":
-        print(f"\n\033[36m> {p['name']} {json.dumps(p['input'])[:300]}\033[0m", flush=True)
-    elif ev.type == "tool_result":
-        lines = p["output"].splitlines()
-        print("\033[33m" + "\n".join("  " + h for h in lines[:5]) + ("\n  ..." if len(lines) > 5 else "") + "\033[0m")
-    elif ev.type == "usage":
-        print(f"\n\033[35m[turn {ev.turn}] in={p['input_tokens']} out={p['output_tokens']} cache_read={p['cache_read_input_tokens']} ${p['cost_usd']:.4f} (agent ${p['total_cost_usd']:.4f})\033[0m")
-    elif ev.type == "error":
-        print(f"\n\033[31m! {p}\033[0m")
-    elif ev.type == "agent_end":
-        print(f"\n\033[32m== {ev.agent_id} stop={p['stop']} cost=${p['cost_usd']:.4f}\033[0m")
-    elif ev.type == "state":
-        print(f"\n\033[1;34m[{p['state']}]\033[0m")
-    elif ev.type in ("branch", "pr", "diagnosis"):
-        print(f"\n\033[1;34m{ev.type}: {json.dumps(p)}\033[0m")
+STATE_LABEL = {
+    "intake": "Understanding the request",
+    "awaiting_confirmation": "Waiting for your go-ahead",
+    "working": "Working",
+    "diagnosing": "Verifying the result",
+    "summarizing": "Writing the summary",
+    "awaiting_pr_decision": "Ready",
+    "done": "Done",
+    "failed": "Failed",
+    "cancelled": "Cancelled",
+}
+
+
+def _brief(name: str, inp: dict[str, Any]) -> str:
+    match name:
+        case "read_file":
+            return f"Read {inp.get('path')}"
+        case "write_file":
+            return f"Write {inp.get('path')}"
+        case "edit_file":
+            return f"Edit {inp.get('path')}"
+        case "glob":
+            return f"Find {inp.get('pattern')}"
+        case "grep":
+            return f"Search /{inp.get('pattern')}/ in {inp.get('path')}"
+        case "bash":
+            lines = str(inp.get("command", "")).splitlines() or [""]
+            return f"$ {lines[0]}" + (f"  … +{len(lines) - 1} lines" if len(lines) > 1 else "")
+        case "spawn_worker":
+            return "Delegate: " + str(inp.get("task", "")).splitlines()[0]
+        case "load_skill":
+            return f"Load skill {inp.get('name')}"
+        case _:
+            return f"{name} {json.dumps(inp)[:120]}"
+
+
+class Printer:
+    """Renders the event stream. Thinking is dim and streamed; tool steps are one line each; text streams plainly."""
+
+    def __init__(self) -> None:
+        self.depth: dict[str, int] = {}
+        self.names: dict[str, str] = {}
+        self.cost: dict[str, float] = {}
+        self.models: dict[str, str] = {}
+        self.streaming: str | None = None  # "thinking" | "text" | None, to place newlines between modes
+
+    def _indent(self, ev: Event) -> str:
+        return "  " * self.depth.get(ev.agent_id, 0)
+
+    def _break(self, mode: str | None) -> None:
+        if self.streaming and self.streaming != mode:
+            console.print()
+        self.streaming = mode
+
+    def __call__(self, ev: Event) -> None:
+        p = ev.payload
+        ind = self._indent(ev)
+        match ev.type:
+            case "state":
+                self._break(None)
+                if p["state"] not in ("awaiting_confirmation", "awaiting_pr_decision"):
+                    console.print(Rule(Text(STATE_LABEL.get(p["state"], p["state"]), style="bold"), style="grey42"))
+            case "agent_start":
+                self._break(None)
+                self.depth[ev.agent_id] = (self.depth.get(ev.parent_id or "", -1) + 1) if ev.parent_id else 0
+                self.names[ev.agent_id] = p["name"]
+                self.models[ev.agent_id] = p["model"]
+                console.print(f"{ind}[bold]● {p['name']}[/]  [grey50]{p['model'].removeprefix('claude-')} · {p['effort']}[/]")
+            case "thinking":
+                if self.streaming != "thinking":
+                    self._break("thinking")
+                    console.print(f"{ind}  ", end="")
+                console.print(Text(p["delta"], style="grey42 italic"), end="", soft_wrap=True)
+            case "text":
+                if self.names.get(ev.agent_id) in ("intake", "diagnosis", "summarizer"):
+                    return  # structured JSON or the summary: rendered as a panel instead
+                if self.streaming != "text":
+                    self._break("text")
+                    console.print(f"{ind}  ", end="")
+                console.print(Text(p["delta"]), end="", soft_wrap=True)
+            case "tool_call":
+                self._break(None)
+                console.print(f"{ind}  [cyan]▸[/] [cyan]{_brief(p['name'], p['input'])}[/]", soft_wrap=True)
+            case "tool_result":
+                first = (p["output"].splitlines() or [""])[0]
+                if p["is_error"]:
+                    console.print(f"{ind}    [red]✕ {first[:160]}[/]", soft_wrap=True)
+                elif p["name"] != "spawn_worker":
+                    console.print(f"{ind}    [grey42]{first[:120]}[/]", soft_wrap=True)
+            case "usage":
+                self.cost[ev.agent_id] = p["total_cost_usd"]
+            case "error":
+                self._break(None)
+                console.print(f"{ind}  [red]! {p.get('reason') or p}[/]")
+            case "agent_end":
+                self._break(None)
+                mark = "[green]✓[/]" if p["stop"] == "end_turn" else f"[yellow]■ {p['stop']}[/]"
+                console.print(f"{ind}{mark} [bold]{self.names.get(ev.agent_id, ev.agent_id)}[/]  [grey50]${p['cost_usd']:.4f} · {p['input_tokens'] // 1000}k in · {p['output_tokens']} out · {p['cache_read_input_tokens'] // 1000}k cached[/]")
+            case "branch":
+                console.print(f"[grey50]branch {p['branch']}[/]")
+            case "diagnosis":
+                self._break(None)
+                if p["complete"]:
+                    console.print("[green]✓ Verified complete[/]")
+                else:
+                    console.print("[yellow]! Gaps found:[/]\n" + "\n".join(f"  - {g}" for g in p["gaps"]))
+            case "pr":
+                console.print(f"[green]PR: {p['url']}[/]")
 
 
 class TerminalIO:
     def confirm_intake(self, intake: dict[str, Any]) -> tuple[bool, str]:
-        print("\n\033[1mUnderstanding:\033[0m", intake["understanding"])
-        print("\033[1mPlan:\033[0m\n" + "\n".join(f"  {i + 1}. {s}" for i, s in enumerate(intake["plan"])))
+        console.print()
+        body = intake["understanding"] + "\n\n**Plan**\n" + "\n".join(f"{i + 1}. {s}" for i, s in enumerate(intake["plan"]))
         if intake["questions"]:
-            print("\033[1mQuestions:\033[0m\n" + "\n".join(f"  - {q}" for q in intake["questions"]))
-        ans = input("\nProceed? [y / or type feedback] > ").strip()
-        return (True, "") if ans.lower() in ("y", "yes") else (False, ans or "please reconsider")
+            body += "\n\n**Questions**\n" + "\n".join(f"- {q}" for q in intake["questions"])
+        console.print(Panel(Markdown(body), title="What I understood", border_style="cyan", padding=(1, 2)))
+        ans = Prompt.ask("[bold]Proceed?[/] [grey50](y, or type what to change)[/]", default="y").strip()
+        console.print()
+        return (True, "") if ans.lower() in ("y", "yes") else (False, ans)
 
     def approve_command(self, command: str) -> bool:
-        return input(f"\nAllow command? [y/N] {command}\n> ").strip().lower() == "y"
+        console.print(Panel(Text(command, style="bold"), title="Allow this command?", border_style="yellow"))
+        ok = Confirm.ask("Allow", default=False)
+        console.print()
+        return ok
 
     def want_pr(self, summary: str) -> bool:
-        print("\n" + summary)
-        return input("\nOpen a PR? [y/N] > ").strip().lower() == "y"
+        console.print(Panel(Markdown(summary.split("\nTITLE:")[0]), title="Summary", border_style="green", padding=(1, 2)))
+        ok = Confirm.ask("Open a pull request", default=False)
+        console.print()
+        return ok
+
+
+def _report(run: Run, printer: Printer) -> None:
+    t = Table(title="Cost", title_style="bold", header_style="grey50", box=None, padding=(0, 2))
+    t.add_column("agent")
+    t.add_column("model")
+    t.add_column("usd", justify="right")
+    for aid, c in printer.cost.items():
+        t.add_row(printer.names.get(aid, aid), printer.models.get(aid, "").removeprefix("claude-"), f"{c:.4f}")
+    t.add_row("[bold]total[/]", "", f"[bold]{run.cost_usd:.4f}[/]")
+    console.print()
+    console.print(t)
+    color = {"done": "green", "failed": "red", "cancelled": "yellow"}.get(run.state, "white")
+    lines = [f"[{color}]{STATE_LABEL.get(run.state, run.state)}[/]"]
+    if run.branch:
+        lines.append(f"branch  {run.branch}" + (f"  @ {run.commit}" if run.commit else "  (nothing committed)"))
+    if run.pr_url:
+        lines.append(f"PR      {run.pr_url}")
+    console.print(Panel("\n".join(lines), border_style=color))
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("task")
-    ap.add_argument("--cwd", default=".")
-    ap.add_argument("--model", default="claude-opus-5-5", help="model for intake/supervisor/diagnosis/summary")
-    ap.add_argument("--worker-model", default="claude-sonnet-5-5")
-    ap.add_argument("--max-cost", type=float, default=20.0)
-    ap.add_argument("--worker", action="store_true", help="run a single worker agent instead of the lifecycle")
+    ap = argparse.ArgumentParser(prog="harness", description="Intake → confirm → supervisor + workers → diagnosis → summary → branch/PR.")
+    ap.add_argument("task", help="what to do, in plain language")
+    ap.add_argument("--cwd", default=".", help="repository to work in (default: current directory)")
+    ap.add_argument("--model", default="claude-opus-5-5", help="model for intake, supervisor, diagnosis and summary")
+    ap.add_argument("--worker-model", default="claude-sonnet-5-5", help="model for workers")
+    ap.add_argument("--max-cost", type=float, default=20.0, metavar="USD", help="stop the run past this spend")
+    ap.add_argument("--worker", action="store_true", help="run a single worker agent on the task, no lifecycle")
     a = ap.parse_args(argv)
     if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(encoding="utf-8")  # Windows consoles default to cp1252 and choke on model output
+        sys.stdout.reconfigure(encoding="utf-8")
 
-    bus = EventBus()
-    bus.subscribe(_print)
     cwd = Path(a.cwd).resolve()
+    cfg = load_config(cwd)
+    printer = Printer()
+    bus = EventBus()
+    bus.subscribe(printer)
     io = TerminalIO()
     client = anthropic.Anthropic()
 
+    head = Table.grid(padding=(0, 2))
+    head.add_row("[grey50]task[/]", Text(a.task))
+    head.add_row("[grey50]repo[/]", str(cwd) + ("  [grey50](.harness found)[/]" if cfg.root else ""))
+    head.add_row("[grey50]models[/]", f"{a.model.removeprefix('claude-')} / workers {a.worker_model.removeprefix('claude-')}")
+    head.add_row("[grey50]cap[/]", f"${a.max_cost:.2f}")
+    console.print(Panel(head, title="[bold]harness[/]", border_style="grey42"))
+
     if a.worker:
-        cfg = load_config(cwd)
         agent = AgentDef(name="worker", system=cfg.system_prompt("worker"), model=a.model, max_cost_usd=a.max_cost)
         res = run_agent(client, agent, [{"role": "user", "content": a.task}], ToolContext(root=cwd, approve=io.approve_command), bus, run_id=uuid.uuid4().hex[:8])
+        console.print(Panel(Markdown(res.text or "(no text)"), title="Worker report", border_style="green" if res.stop == "end_turn" else "yellow"))
+        console.print(f"[grey50]${res.cost_usd:.4f} · stop={res.stop}[/]")
         return 0 if res.stop == "end_turn" else 1
 
-    run = Run(task=a.task, cwd=cwd, io=io, client=client, bus=bus, main_model=a.model, worker_model=a.worker_model, max_cost_usd=a.max_cost)
-    run.run()
-    print(f"\nTotal cost: ${run.cost_usd:.4f}  branch={run.branch} commit={run.commit} pr={run.pr_url or '-'}")
+    run = Run(task=a.task, cwd=cwd, io=io, client=client, bus=bus, main_model=a.model, worker_model=a.worker_model, max_cost_usd=a.max_cost, cfg=cfg)
+    try:
+        run.run()
+    except KeyboardInterrupt:
+        run.cancel()
+        console.print("\n[yellow]Interrupted.[/]")
+    except Exception as e:  # state is already "failed"; show it briefly
+        console.print(f"[red]{type(e).__name__}: {e}[/]")
+    _report(run, printer)
     return 0 if run.state == "done" else 1
 
 
