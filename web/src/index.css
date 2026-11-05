@@ -6,7 +6,10 @@
   --color-foreground: #f5f5f6;
   --color-card: #15161b;
   --color-card-foreground: #f5f5f6;
-  --color-border: #2b2d36;
+  --color-border: #2a2c35;
+  --radius-lg: 24px;
+  --radius-md: 14px;
+  --radius-sm: 10px;
   --color-muted: #23252d;
   --color-muted-foreground: #a3a3ab;
   --color-primary: #a9dcff;
@@ -50,6 +53,11 @@ code, pre, .mono { font-family: ui-monospace, "Cascadia Code", Consolas, monospa
 pre { white-space: pre-wrap; word-break: break-word; }
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.12); border-radius: 4px; }
+
+/* One radius scale for every surface: large panels, cards, controls. Pills are rounded-full. */
+.r-lg { border-radius: var(--radius-lg); }
+.r-md { border-radius: var(--radius-md); }
+.r-sm { border-radius: var(--radius-sm); }
 
 .glass {
   background: var(--glass);

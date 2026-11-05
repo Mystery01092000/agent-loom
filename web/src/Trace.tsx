@@ -87,7 +87,8 @@ const FINISHED = new Set(['done', 'failed', 'cancelled'])
 
 export function TraceView({ runs }: { runs: RunRow[] }) {
   return (
-    <div className="mx-auto max-w-5xl space-y-6 px-5 pt-8 pb-6">
+    <div className="mx-auto max-w-5xl space-y-8 px-5 pt-6 pb-10">
+      <p className="text-sm" style={{ color: 'var(--muted)' }}>What the agents did, on a time axis. Drag the playhead or press play to replay. Click a row to jump to it.</p>
       {runs.map((r) => <RunTrace key={r.id} run={r} />)}
     </div>
   )
@@ -112,6 +113,7 @@ function RunTrace({ run }: { run: RunRow }) {
       <p className="mb-2 truncate text-sm" style={{ color: 'var(--muted)' }}>{run.task.replace(/^\[[^\]]+\]\s*/, '')}</p>
       {spans.length ? (
         <AgentTrace
+          className="glass r-lg border-0 shadow-none"
           spans={spans}
           duration={total || undefined}
           runId={`run_${run.id}`}

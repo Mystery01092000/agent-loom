@@ -15,7 +15,7 @@ export function Md({ text }: { text: string }) {
 
 export function Btn({ children, onClick, secondary }: { children: React.ReactNode; onClick: () => void; secondary?: boolean }) {
   return (
-    <button className={`${secondary ? 'pill' : 'solid'} h-9 rounded-xl px-4 text-sm font-medium transition`} onClick={onClick}>
+    <button className={`${secondary ? 'pill' : 'solid'} r-sm h-9 px-4 text-sm font-medium transition`} onClick={onClick}>
       {children}
     </button>
   )
@@ -66,8 +66,8 @@ export function Chat({ runs, onSubmit }: { runs: RunRow[]; onSubmit: (text: stri
             <Btn secondary onClick={() => api.cancel(last.id)}>Stop run</Btn>
           </div>
         )}
-        {finished && <NewTaskComposer placeholder="Continue this thread: ask for a follow-up, a fix, or to resume where it stopped…" onSubmit={(t, k, m) => onSubmit(t, k, m, last.id)} />}
-        {revising && (
+        {tab === 'chat' && finished && <NewTaskComposer placeholder="Continue this thread: ask for a follow-up, a fix, or to resume where it stopped…" onSubmit={(t, k, m) => onSubmit(t, k, m, last.id)} />}
+        {tab === 'chat' && revising && (
           <PromptComposer
             prompts={[]}
             placeholder="Describe what to change in the plan, then press Enter…"
@@ -129,7 +129,7 @@ export function NewTaskComposer({ onSubmit, placeholder }: { onSubmit: (text: st
 function UserMsg({ text }: { text: string }) {
   return (
     <div className="mb-8 flex justify-end">
-      <div className="glass max-w-[85%] whitespace-pre-wrap rounded-3xl rounded-br-lg px-5 py-3">{text}</div>
+      <div className="glass r-lg max-w-[85%] whitespace-pre-wrap px-5 py-3" style={{ borderBottomRightRadius: 8 }}>{text}</div>
     </div>
   )
 }
@@ -143,7 +143,7 @@ function AssistantTurn({ v, id }: { v: View; id: string }) {
 
   return (
     <div className="flex gap-4">
-      <div className="mt-1 h-7 w-7 shrink-0 rounded-xl" style={{ background: 'linear-gradient(160deg,#e8f6ff,#a9dcff 48%,#5fb2f2)', boxShadow: '0 4px 16px rgba(95,178,242,.42)' }} />
+      <div className="mt-1 h-7 w-7 shrink-0 r-sm" style={{ background: 'linear-gradient(160deg,#e8f6ff,#a9dcff 48%,#5fb2f2)', boxShadow: '0 4px 16px rgba(95,178,242,.42)' }} />
       <div className="min-w-0 flex-1 space-y-5">
         {intake && <Steps agents={[intake]} v={v} />}
         {v.intake ? (
@@ -158,9 +158,9 @@ function AssistantTurn({ v, id }: { v: View; id: string }) {
         {v.branch && <p className="mono text-xs" style={{ color: 'var(--dim)' }}>working on branch {v.branch}</p>}
         {work.length > 0 && <Steps agents={work} v={v} />}
         {v.pending?.kind === 'approve_command' && (
-          <div className="glass rounded-2xl p-4">
+          <div className="glass r-md p-4">
             <p className="mb-2 text-sm font-medium">Allow this command?</p>
-            <pre className="mb-3 rounded-xl p-3" style={{ background: 'var(--code)' }}>{v.pending.command}</pre>
+            <pre className="mb-3 r-sm p-3" style={{ background: 'var(--code)' }}>{v.pending.command}</pre>
             <div className="flex gap-2"><Btn onClick={() => api.decide(id, true)}>Allow</Btn><Btn secondary onClick={() => api.decide(id, false)}>Deny</Btn></div>
           </div>
         )}
@@ -188,7 +188,7 @@ function AssistantTurn({ v, id }: { v: View; id: string }) {
         {v.pr && <p className="text-sm">PR opened: <a className="underline" style={{ color: 'var(--accent)' }} href={v.pr} target="_blank">{v.pr}</a></p>}
         {v.state === 'done' && !v.pr && v.branch && <p className="text-sm" style={{ color: 'var(--muted)' }}>Done. The work is committed on {v.branch}.</p>}
         {v.state === 'cancelled' && <p className="text-sm" style={{ color: 'var(--warn)' }}>Stopped. {v.branch ? `Any partial work is left uncommitted on ${v.branch}.` : ''}</p>}
-        {v.error && <pre className="rounded-xl p-3 text-sm" style={{ background: 'var(--code)', color: 'var(--err)' }}>{v.error}</pre>}
+        {v.error && <pre className="r-sm p-3 text-sm" style={{ background: 'var(--code)', color: 'var(--err)' }}>{v.error}</pre>}
       </div>
     </div>
   )
@@ -267,12 +267,12 @@ function Tool({ c, child }: { c: ToolCall; child?: Agent }) {
   const pending = c.output === undefined
   return (
     <div className="my-1">
-      <button className="flex w-full items-start gap-2 rounded-lg px-1.5 py-0.5 text-left text-sm hover:bg-white/5" onClick={() => setOpen(!open)}>
+      <button className="flex w-full items-start gap-2 r-sm px-1.5 py-0.5 text-left text-sm hover:bg-white/5" onClick={() => setOpen(!open)}>
         <span className="mono mt-0.5 shrink-0 text-xs" style={{ color: c.is_error ? 'var(--err)' : pending ? 'var(--warn)' : 'var(--accent)' }}>{pending ? '○' : c.is_error ? '✕' : '●'}</span>
         <span className="mono min-w-0 flex-1 truncate" style={{ color: 'var(--muted)' }}>{brief(c)}</span>
       </button>
       {open && (
-        <div className="ml-5 mt-1 rounded-xl text-xs" style={{ background: 'var(--code)', boxShadow: 'inset 0 0 0 1px rgba(255,255,255,.07)' }}>
+        <div className="ml-5 mt-1 r-sm text-xs" style={{ background: 'var(--code)', boxShadow: 'inset 0 0 0 1px rgba(255,255,255,.07)' }}>
           <pre className="max-h-48 overflow-auto p-3">{JSON.stringify(c.input, null, 2)}</pre>
           {c.output !== undefined && <pre className="max-h-64 overflow-auto p-3" style={{ boxShadow: 'inset 0 1px 0 rgba(255,255,255,.07)', color: c.is_error ? 'var(--err)' : 'var(--text)' }}>{c.output}</pre>}
         </div>
@@ -296,7 +296,7 @@ function CostStrip({ views }: { views: View[] }) {
         {usd(cost)} · {k(tok.in)} in · {k(tok.out)} out · {k(tok.cache)} cached{views.length > 1 ? ` · ${views.length} runs` : ''} {open ? '▾' : '▸'}
       </button>
       {open && (
-        <div className="glass rounded-2xl p-3">
+        <div className="glass r-md p-3">
           {rows.map((a) => (
             <div key={a.id} className="flex items-center gap-2 py-0.5" style={{ color: 'var(--muted)' }}>
               <span className="w-24 truncate">{a.name}</span>

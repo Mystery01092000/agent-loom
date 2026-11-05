@@ -38,20 +38,20 @@ export default function App() {
     refresh()
   }
   const current = threads.find((t) => t.id === sel)
-  const field = 'mono mt-1 w-full rounded-lg px-2.5 py-1.5 text-xs outline-none'
+  const field = 'mono r-sm mt-1 w-full px-2.5 py-1.5 text-xs outline-none'
   const fieldStyle = { background: 'rgba(0,0,0,.35)', boxShadow: 'inset 0 0 0 1px var(--line)', color: 'var(--text)' }
 
   return (
     <div className="flex h-full p-3 gap-3">
-      <aside className="glass flex min-h-0 shrink-0 flex-col rounded-3xl transition-all" style={{ width: sidebar ? 264 : 0, overflow: 'hidden', opacity: sidebar ? 1 : 0 }}>
+      <aside className="glass r-lg flex min-h-0 shrink-0 flex-col transition-all" style={{ width: sidebar ? 264 : 0, overflow: 'hidden', opacity: sidebar ? 1 : 0 }}>
         <div className="flex items-center gap-2 px-4 pt-4 pb-2">
-          <span className="h-3 w-3 rounded-md" style={{ background: 'linear-gradient(160deg,#e8f6ff,#5fb2f2)', boxShadow: '0 0 12px rgba(95,178,242,.6)' }} />
+          <span className="h-3 w-3 rounded-[4px]" style={{ background: 'linear-gradient(160deg,#e8f6ff,#5fb2f2)', boxShadow: '0 0 12px rgba(95,178,242,.6)' }} />
           <span className="font-semibold tracking-tight">Harness</span>
-          <button className="pill ml-auto rounded-lg px-2.5 py-1 text-xs" onClick={() => setSel(null)}>+ New</button>
+          <button className="pill r-sm ml-auto px-2.5 py-1 text-xs" onClick={() => setSel(null)}>+ New</button>
         </div>
         <div className="min-h-0 flex-1 overflow-auto px-2 py-1">
           {threads.map((t) => (
-            <button key={t.id} className="mb-1 block w-full rounded-xl px-3 py-2 text-left text-sm transition hover:bg-white/5" style={{ background: sel === t.id ? 'rgba(255,255,255,.08)' : undefined }} onClick={() => setSel(t.id)}>
+            <button key={t.id} className="r-sm mb-1 block w-full px-3 py-2 text-left text-sm transition hover:bg-white/5" style={{ background: sel === t.id ? 'rgba(255,255,255,.08)' : undefined }} onClick={() => setSel(t.id)}>
               <div className="truncate">{t.task.replace(/^\[[^\]]+\]\s*/, '')}</div>
               <div className="mono mt-0.5 flex gap-2 text-[11px]" style={{ color: 'var(--dim)' }}>
                 <span style={{ color: stateColor(t.state) }}>{t.state.replace(/_/g, ' ')}</span>
@@ -71,7 +71,7 @@ export default function App() {
         </div>
       </aside>
       <main className="relative min-h-0 min-w-0 flex-1">
-        <button aria-label="Toggle sidebar" className="absolute left-1 top-1 z-10 rounded-lg px-2 py-1 text-sm hover:bg-white/5" style={{ color: 'var(--muted)' }} onClick={() => setSidebar(!sidebar)}>☰</button>
+        <button aria-label="Toggle sidebar" className="r-sm absolute left-1 top-1 z-10 px-2 py-1 text-sm hover:bg-white/5" style={{ color: 'var(--muted)' }} onClick={() => setSidebar(!sidebar)}>☰</button>
         {current ? (
           <Chat key={current.id} runs={current.runs} onSubmit={start} />
         ) : (
