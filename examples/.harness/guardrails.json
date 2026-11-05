@@ -1,0 +1,6 @@
+{
+  "deny": ["\brm\s+-rf\s+[/~]", "\bgit\s+push\b.*--force", "\bgit\s+reset\s+--hard", "\bdocker\s+system\s+prune\b"],
+  "ask": ["\brm\b", "\bgit\s+push\b", "\bgo\s+install\b", "\bcurl\b.*\|\s*(ba)?sh"],
+  "allow": ["^go (build|test|vet|fmt|mod tidy)\b", "^make (build|test)\b"],
+  "bash_timeout": 300
+}

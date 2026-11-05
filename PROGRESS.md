@@ -15,6 +15,8 @@ Legend: **Dev** = code written Â· **Tested** = automated tests pass Â· **Live** 
 | P3 git branch + PR | x | x | partial | x | branch+commit live; gh pr create needs a repo with origin |
 | P4 SQLite store | x | x | n/a | x | |
 | P4 FastAPI + SSE | x | x | x | x | drove the live run through the API |
+| P6 config: agents/instructions/guardrails/hooks/skills | x | x | | x | not yet exercised on a live run |
+| P6 evals runner | x | x | | x | `uv run python -m evals.run`; not yet run against the real API |
 | P5 UI | x | x | x | x | Redesigned as a Claude-style chat: user bubble, assistant prose (markdown), collapsible agent steps w/ nested workers + thinking, inline decisions, cost strip at the bottom. Verified live in Chrome on the Go todo-api run |
 
 ## How to run
@@ -39,3 +41,4 @@ cd server && uv run python -m harness.cli "task" --cwd <repo> # terminal flow
 - `feat: liquid-glass UI` — prompt-composer component under web/src/components/ui (gsap), @/ alias, dark glass theme across sidebar/chat/cost strip; task-kind chips and model menu wired to the API
 - `feat: README, cancel, tail caching` — README with philosophy + screenshots, POST /runs/{id}/cancel + Stop button, top-level cache_control on the conversation tail; 18 tests green
 - `feat: thread continuation` — runs grouped into threads; typing under a finished/cancelled run continues on the same branch with thread history as intake context; orphan sweep on restart; 20 tests green
+- `feat: .harness config layer` — agents as markdown (defaults + repo overrides), instructions.md, guardrails.json (deny/ask/allow), hooks.json (pre_tool blocks, post_tool, state), skills/ + load_skill tool, evals runner with 3 cases, examples/.harness; 28 tests green

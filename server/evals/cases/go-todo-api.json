@@ -1,0 +1,11 @@
+{
+  "task": "Build a small Go project: a todo list HTTP API using only the standard library. Module name github.com/example/todo-api. Endpoints: GET /todos, POST /todos, DELETE /todos/{id}. In-memory store with a mutex. Include httptest unit tests and a Makefile with build and test targets. go build and go test must pass.",
+  "files": { "README.md": "# todo-api\n" },
+  "checks": [
+    { "cmd": "go build ./..." },
+    { "cmd": "go vet ./..." },
+    { "cmd": "go test ./...", "expect_stdout": "ok" },
+    { "cmd": "make -n build" }
+  ],
+  "max_cost_usd": 2.0
+}

@@ -21,6 +21,11 @@ class ToolContext:
     root: Path
     approve: Callable[[str], bool] | None = None  # asked before risky bash; None = deny
     bash_timeout: int = 120
+    deny: list[str] | None = None  # regexes; None = module DENY
+    ask: list[str] | None = None
+    allow: list[str] | None = None  # auto-approved even if they match ask
+    pre_tool: Callable[[str, dict[str, Any]], str | None] | None = None  # returns a block reason, or None
+    post_tool: Callable[[str, dict[str, Any], str, bool], None] | None = None
 
     def resolve(self, rel: str) -> Path:
         root = self.root.resolve()
@@ -108,9 +113,10 @@ ASK = [r"\brm\b", r"\bgit\s+push\b", r"\bsudo\b", r"\bcurl\b.*\|\s*(ba)?sh", r"\
 
 
 def bash(ctx: ToolContext, command: str) -> str:
-    if any(re.search(p, command) for p in DENY):
+    if any(re.search(p, command) for p in (DENY if ctx.deny is None else ctx.deny)):
         raise ToolError("command is denylisted")
-    if any(re.search(p, command) for p in ASK):
+    allowed = any(re.search(p, command) for p in (ctx.allow or []))
+    if not allowed and any(re.search(p, command) for p in (ASK if ctx.ask is None else ctx.ask)):
         if ctx.approve is None or not ctx.approve(command):
             raise ToolError("command requires approval and was not approved")
     sh = shutil.which("bash")
@@ -156,9 +162,16 @@ def execute(ctx: ToolContext, name: str, inp: Any, allowed: list[str], registry:
         return f"invalid input for {name}: {inp!r}", True
     if schema.get("strict") and not all(isinstance(inp[k], str) for k in inp):
         return f"invalid input for {name}: {inp!r}", True
+    if ctx.pre_tool is not None:
+        reason = ctx.pre_tool(name, inp)
+        if reason:
+            return f"blocked by hook: {reason}", True
     try:
-        return fn(ctx, **inp), False
+        out, err = fn(ctx, **inp), False
     except ToolError as e:
-        return str(e), True
+        out, err = str(e), True
     except Exception as e:  # a tool bug must not kill the loop
-        return f"{type(e).__name__}: {e}", True
+        out, err = f"{type(e).__name__}: {e}", True
+    if ctx.post_tool is not None:
+        ctx.post_tool(name, inp, out, err)
+    return out, err

@@ -12,8 +12,9 @@ from typing import Any
 import anthropic
 
 from .agent import AgentDef, run_agent
+from .config import load_config
 from .events import Event, EventBus
-from .lifecycle import WORKER_SYS, Run
+from .lifecycle import Run
 from .tools import ToolContext
 
 
@@ -78,7 +79,8 @@ def main(argv: list[str] | None = None) -> int:
     client = anthropic.Anthropic()
 
     if a.worker:
-        agent = AgentDef(name="worker", system=WORKER_SYS, model=a.model, max_cost_usd=a.max_cost)
+        cfg = load_config(cwd)
+        agent = AgentDef(name="worker", system=cfg.system_prompt("worker"), model=a.model, max_cost_usd=a.max_cost)
         res = run_agent(client, agent, [{"role": "user", "content": a.task}], ToolContext(root=cwd, approve=io.approve_command), bus, run_id=uuid.uuid4().hex[:8])
         return 0 if res.stop == "end_turn" else 1
 

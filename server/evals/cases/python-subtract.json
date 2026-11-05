@@ -1,0 +1,9 @@
+{
+  "task": "Add a subtract(a, b) function to calc.py and a pytest file test_calc.py covering add and subtract. Run the tests.",
+  "files": { "calc.py": "def add(a, b):\n    return a + b\n" },
+  "checks": [
+    { "cmd": "python -c \"from calc import add, subtract; assert subtract(5, 3) == 2 and add(1, 2) == 3\"" },
+    { "cmd": "python -m pytest -q", "expect_stdout": "passed" }
+  ],
+  "max_cost_usd": 1.0
+}

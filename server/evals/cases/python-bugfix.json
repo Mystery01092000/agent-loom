@@ -1,0 +1,12 @@
+{
+  "task": "[Bug fix] test_slugify fails. Find the root cause in slug.py and fix it without changing the test.",
+  "files": {
+    "slug.py": "import re\n\n\ndef slugify(text: str) -> str:\n    text = text.lower()\n    text = re.sub(r\"[^a-z0-9]+\", \"-\", text)\n    return text\n",
+    "test_slug.py": "from slug import slugify\n\n\ndef test_slugify():\n    assert slugify(\"Hello, World!\") == \"hello-world\"\n    assert slugify(\"  spaced out  \") == \"spaced-out\"\n    assert slugify(\"already-fine\") == \"already-fine\"\n"
+  },
+  "checks": [
+    { "cmd": "python -m pytest -q", "expect_stdout": "passed" },
+    { "cmd": "git diff HEAD --stat -- test_slug.py", "expect_stdout": "" }
+  ],
+  "max_cost_usd": 1.0
+}

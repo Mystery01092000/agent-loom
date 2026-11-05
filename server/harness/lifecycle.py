@@ -13,10 +13,9 @@ from typing import Any, Protocol
 
 from . import git
 from .agent import AgentDef, RunResult, run_agent
+from .config import HarnessConfig, load_config
 from .events import Event, EventBus
-from .tools import ALL_TOOLS, ToolContext
-
-READ_ONLY = ["read_file", "glob", "grep"]
+from .tools import TOOLS, ToolContext, ToolError
 
 INTAKE_SCHEMA = {
     "type": "object",
@@ -38,33 +37,6 @@ DIAG_SCHEMA = {
     "required": ["complete", "gaps", "evidence"],
     "additionalProperties": False,
 }
-
-INTAKE_SYS = (
-    "You are the intake agent. Read the user's request and skim the repository with the read-only tools "
-    "to understand context. Produce a short, concrete understanding and plan. Ask questions only when the "
-    "request is genuinely ambiguous in a way that changes the work. Do not write any code."
-)
-SUPERVISOR_SYS = (
-    "You are the supervisor. You own delivering the confirmed plan. Split the work into independent tasks and "
-    "delegate each with spawn_worker, giving the worker the full context it needs (files, conventions, acceptance "
-    "criteria). Workers have their own fresh context and do not see this conversation. After each worker returns, "
-    "verify its work yourself by reading the files or running commands; re-spawn with precise corrections if needed. "
-    "Do not edit files yourself. Finish with a short report of what was done."
-)
-WORKER_SYS = (
-    "You are a software engineering worker. Complete exactly the task given, inside this repository. Read before "
-    "you edit, keep changes minimal and correct, run tests when they exist. Finish with a few lines stating what "
-    "you changed and anything you could not do."
-)
-DIAG_SYS = (
-    "You are the diagnosis agent. Decide whether the work in the diff fully satisfies the user's original request. "
-    "Verify independently: read the changed files, run the tests or the code if practical. Be strict and specific; "
-    "list every gap. Do not edit files."
-)
-SUMMARY_SYS = (
-    "You are the summarizer. Write a concise markdown summary for the user of what was changed and why, with the "
-    "diagnosis verdict. Then a one-line PR title on the last line prefixed with 'TITLE: '. Do not use tools."
-)
 
 
 class UserIO(Protocol):
@@ -95,11 +67,19 @@ class Run:
     pr_url: str = ""
     cost_usd: float = 0.0
     cancelled: threading.Event = field(default_factory=threading.Event)
+    cfg: HarnessConfig | None = None  # loaded from <cwd>/.harness unless injected
     _workers: int = 0
 
     def __post_init__(self) -> None:
         self.thread_id = self.thread_id or self.id
+        self.cfg = self.cfg or load_config(self.cwd)
         self.bus.subscribe(self._track_cost)
+        if self.cfg.hooks:
+            self.bus.subscribe(self._state_hooks)
+
+    def _state_hooks(self, ev: Event) -> None:
+        if ev.type == "state":
+            self.cfg.run_hooks("state", ev.payload["state"], {"run_id": self.id, "thread_id": self.thread_id, "task": self.task, **ev.payload}, self.cwd)
 
     @property
     def request(self) -> str:
@@ -124,10 +104,60 @@ class Run:
         self.bus.emit(Event("state", self.id, "run", {"state": state, **payload}))
 
     def _ctx(self) -> ToolContext:
-        return ToolContext(root=self.cwd, approve=self.io.approve_command)
+        g = self.cfg.guardrails
+        hooks = self.cfg.hooks
 
-    def _agent(self, name: str, system: str, **kw: Any) -> AgentDef:
-        return AgentDef(name=name, system=system, model=self.main_model, effort="high", max_cost_usd=self.max_cost_usd, **kw)
+        def pre(name: str, inp: dict[str, Any]) -> str | None:
+            return self.cfg.run_hooks("pre_tool", name, {"run_id": self.id, "tool": name, "input": inp}, self.cwd)
+
+        def post(name: str, inp: dict[str, Any], out: str, err: bool) -> None:
+            self.cfg.run_hooks("post_tool", name, {"run_id": self.id, "tool": name, "input": inp, "output": out[:4000], "is_error": err}, self.cwd)
+
+        return ToolContext(
+            root=self.cwd,
+            approve=self.io.approve_command,
+            bash_timeout=int(g.get("bash_timeout", 120)),
+            deny=g.get("deny"),
+            ask=g.get("ask"),
+            allow=g.get("allow"),
+            pre_tool=pre if hooks else None,
+            post_tool=post if hooks else None,
+        )
+
+    def _load_skill_tool(self) -> tuple[dict[str, Any], Any]:
+        schema = {
+            "description": "Read the full instructions of a skill listed in the system prompt.",
+            "strict": True,
+            "input_schema": {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"], "additionalProperties": False},
+        }
+
+        def load(ctx: ToolContext, name: str) -> str:
+            skill = self.cfg.skills.get(name)
+            if skill is None:
+                raise ToolError(f"unknown skill {name!r}; available: {', '.join(self.cfg.skills) or 'none'}")
+            return skill.body()
+
+        return schema, load
+
+    def _agent(self, role: str, name: str | None = None, **kw: Any) -> AgentDef:
+        """Build an AgentDef for a role from the repo/default definition, plus project instructions, skills and run-level models."""
+        spec = self.cfg.agent(role)
+        extra: dict[str, Any] = dict(kw.pop("extra_tools", {}))
+        if self.cfg.skills:
+            extra["load_skill"] = self._load_skill_tool()
+        tools = list(TOOLS) if spec.tools is None else list(spec.tools)  # None = every tool, including MCP ones
+        tools += [t for t in extra if t not in tools]
+        return AgentDef(
+            name=name or role,
+            system=self.cfg.system_prompt(role),
+            model=spec.model or (self.worker_model if role == "worker" else self.main_model),
+            effort=spec.effort or "high",
+            tools=tools,
+            max_turns=spec.max_turns or 50,
+            max_cost_usd=min(spec.max_cost_usd or self.max_cost_usd, self.max_cost_usd),
+            extra_tools=extra,
+            **kw,
+        )
 
     def _run(self, agent: AgentDef, prompt: str, parent: str | None = None) -> RunResult:
         self._check_cancel()
@@ -141,7 +171,7 @@ class Run:
 
     def run_intake(self) -> dict[str, Any]:
         self._set("intake")
-        agent = self._agent("intake", INTAKE_SYS, tools=READ_ONLY, output_schema=INTAKE_SCHEMA, max_turns=15)
+        agent = self._agent("intake", output_schema=INTAKE_SCHEMA)
         prompt = f"User request:\n{self.request}"
         for _ in range(3):
             res = self._run(agent, prompt)
@@ -170,7 +200,7 @@ class Run:
 
         def spawn(ctx: ToolContext, task: str, context: str) -> str:
             self._workers += 1
-            worker = AgentDef(name=f"worker{self._workers}", system=WORKER_SYS, model=self.worker_model, effort="medium", max_cost_usd=self.max_cost_usd)
+            worker = self._agent("worker", name=f"worker{self._workers}")
             res = self._run(worker, f"Task:\n{task}\n\nContext:\n{context}", parent=self._supervisor_id)
             return f"[worker stop={res.stop} cost=${res.cost_usd:.3f}]\n{res.text}"
 
@@ -179,7 +209,7 @@ class Run:
     def run_supervisor(self, extra: str = "") -> str:
         self._set("working")
         self._supervisor_id = f"supervisor-{uuid.uuid4().hex[:6]}"
-        agent = self._agent("supervisor", SUPERVISOR_SYS, tools=READ_ONLY + ["bash", "spawn_worker"], extra_tools=self._spawn_worker_tool())
+        agent = self._agent("supervisor", extra_tools=self._spawn_worker_tool())
         prompt = f"User request:\n{self.request}\n\nConfirmed understanding and plan:\n{json.dumps(self.intake, indent=2)}"
         if extra:
             prompt += f"\n\n{extra}"
@@ -190,7 +220,7 @@ class Run:
 
     def run_diagnosis(self) -> dict[str, Any]:
         self._set("diagnosing")
-        agent = self._agent("diagnosis", DIAG_SYS, tools=READ_ONLY + ["bash"], output_schema=DIAG_SCHEMA, max_turns=20)
+        agent = self._agent("diagnosis", output_schema=DIAG_SCHEMA)
         prompt = (
             f"User request:\n{self.request}\n\nConfirmed plan:\n{json.dumps(self.intake, indent=2)}\n\n"
             f"Diff of the work:\n```\n{git.diff(self.cwd) if git.is_repo(self.cwd) else '(not a git repo)'}\n```"
@@ -201,7 +231,7 @@ class Run:
 
     def run_summary(self) -> str:
         self._set("summarizing")
-        agent = self._agent("summarizer", SUMMARY_SYS, tools=[], max_turns=1)
+        agent = self._agent("summarizer")
         prompt = (
             f"User request:\n{self.request}\n\nDiagnosis:\n{json.dumps(self.diagnosis, indent=2)}\n\n"
             f"Changes:\n{git.diff_stat(self.cwd) if git.is_repo(self.cwd) else '(not a git repo)'}\n\nBranch: {self.branch or '(none)'}"
